@@ -3,6 +3,7 @@
 #![forbid(unsafe_code)]
 
 mod author;
+mod htmldiff;
 mod markdown;
 
 use std::path::{Path, PathBuf};
@@ -114,7 +115,13 @@ enum Command {
         output: PathBuf,
     },
     /// Compare two documents as object-set + structural diffs.
-    Diff { old: PathBuf, new: PathBuf },
+    Diff {
+        old: PathBuf,
+        new: PathBuf,
+        /// Write a self-contained HTML redline view to this path.
+        #[arg(long)]
+        html: Option<PathBuf>,
+    },
     /// Fill form fields, producing a new document layered over the base.
     Fill {
         file: PathBuf,
@@ -127,6 +134,10 @@ enum Command {
         /// Fail (instead of warn) when constraints are violated.
         #[arg(long)]
         strict: bool,
+        /// Prompt for each field on the terminal with live constraint
+        /// feedback (re-prompts on violation; empty input skips).
+        #[arg(short, long)]
+        interactive: bool,
     },
     /// Replace all fields with their final values (defined merge, §6).
     Flatten {
@@ -203,13 +214,14 @@ fn run() -> Result<()> {
             reason,
             output,
         } => redact(&file, &path, reason, &output),
-        Command::Diff { old, new } => diff(&old, &new),
+        Command::Diff { old, new, html } => diff(&old, &new, html.as_deref()),
         Command::Fill {
             file,
             sets,
             output,
             strict,
-        } => fill(&file, &sets, &output, strict),
+            interactive,
+        } => fill(&file, &sets, &output, strict, interactive),
         Command::Flatten { file, output } => flatten(&file, &output),
         Command::Export {
             file,
@@ -591,10 +603,15 @@ fn redact(file: &Path, path_str: &str, reason: Option<String>, output: &Path) ->
     Ok(())
 }
 
-fn diff(old: &Path, new: &Path) -> Result<()> {
+fn diff(old: &Path, new: &Path, html: Option<&Path>) -> Result<()> {
     let a = load(old)?;
     let b = load(new)?;
     let d = vsd_core::diff::diff(&a.document, &b.document)?;
+    if let Some(html_path) = html {
+        let page = htmldiff::render_diff_html(&a.document, &b.document)?;
+        std::fs::write(html_path, &page)?;
+        println!("redline view → {}", html_path.display());
+    }
     if d.same_document {
         println!(
             "identical documents (id {}) — possibly different containers/compression",
@@ -621,9 +638,14 @@ fn diff(old: &Path, new: &Path) -> Result<()> {
     Ok(())
 }
 
-fn fill(file: &Path, sets: &[String], output: &Path, strict: bool) -> Result<()> {
+fn fill(
+    file: &Path,
+    sets: &[String],
+    output: &Path,
+    strict: bool,
+    interactive: bool,
+) -> Result<()> {
     use std::collections::BTreeMap;
-    use vsd_core::forms::FieldValue;
     use vsd_core::tree::FieldKind;
 
     let vsd = load(file)?;
@@ -638,18 +660,20 @@ fn fill(file: &Path, sets: &[String], output: &Path, strict: bool) -> Result<()>
         let kind = kinds
             .get(id)
             .with_context(|| format!("no field with id {id:?}"))?;
-        let value = match kind {
-            FieldKind::Number => FieldValue::Num(
-                raw.parse::<f64>()
-                    .with_context(|| format!("field {id:?} is a number, got {raw:?}"))?,
-            ),
-            FieldKind::Checkbox => FieldValue::Bool(
-                raw.parse::<bool>()
-                    .with_context(|| format!("field {id:?} is a checkbox, use true/false"))?,
-            ),
-            _ => FieldValue::Str(raw.to_owned()),
-        };
+        let value = parse_field_value(*kind, raw)
+            .with_context(|| format!("field {id:?} ({})", kind.as_str()))?;
         inputs.insert(id.to_owned(), value);
+    }
+
+    if interactive {
+        let stdin = std::io::stdin();
+        interactive_fill(
+            &vsd.document,
+            &fields,
+            &mut inputs,
+            &mut stdin.lock(),
+            &mut std::io::stderr(),
+        )?;
     }
 
     let result = vsd_core::fill::fill(&vsd.document, &inputs)?;
@@ -672,6 +696,124 @@ fn fill(file: &Path, sets: &[String], output: &Path, strict: bool) -> Result<()>
         result.document.document_id()?,
         vsd.document_id
     );
+    Ok(())
+}
+
+fn parse_field_value(
+    kind: vsd_core::tree::FieldKind,
+    raw: &str,
+) -> Result<vsd_core::forms::FieldValue> {
+    use vsd_core::forms::FieldValue;
+    use vsd_core::tree::FieldKind;
+    Ok(match kind {
+        FieldKind::Number => FieldValue::Num(
+            raw.parse::<f64>()
+                .with_context(|| format!("expected a number, got {raw:?}"))?,
+        ),
+        FieldKind::Checkbox => FieldValue::Bool(
+            raw.parse::<bool>()
+                .with_context(|| format!("expected true/false, got {raw:?}"))?,
+        ),
+        _ => FieldValue::Str(raw.to_owned()),
+    })
+}
+
+/// Terminal form-filling with live constraint evaluation (ROADMAP 4e):
+/// each field is prompted, parsed by kind, and checked against its
+/// constraint immediately — violations re-prompt with the reason.
+/// Empty input keeps the current value. Generic over reader/writer so
+/// the loop is testable without a terminal.
+fn interactive_fill(
+    doc: &vsd_core::Document,
+    fields: &[vsd_core::tree::Field],
+    inputs: &mut std::collections::BTreeMap<String, vsd_core::forms::FieldValue>,
+    reader: &mut impl std::io::BufRead,
+    out: &mut impl std::io::Write,
+) -> Result<()> {
+    use vsd_core::forms::{check_constraints, evaluate_computed, FieldValue};
+
+    // Existing layer values pre-populate the session.
+    if let Some(id) = doc.manifest.field_layer {
+        let layer = vsd_core::forms::FilledLayer::from_value(&doc.store.get_value(&id)?)?;
+        for (k, v) in layer.env() {
+            inputs.entry(k).or_insert(v);
+        }
+    }
+
+    writeln!(
+        out,
+        "interactive fill — empty input keeps the current value"
+    )?;
+    for field in fields {
+        if field.computed.is_some() {
+            continue; // computed fields derive; they are not asked
+        }
+        loop {
+            let current = inputs
+                .get(&field.id)
+                .map(FieldValue::to_text)
+                .unwrap_or_default();
+            write!(
+                out,
+                "{} [{}]{}{}: ",
+                field.label.as_deref().unwrap_or(&field.id),
+                field.kind.as_str(),
+                if field.required { " (required)" } else { "" },
+                if current.is_empty() {
+                    String::new()
+                } else {
+                    format!(" (current: {current})")
+                },
+            )?;
+            out.flush()?;
+            let mut line = String::new();
+            if reader.read_line(&mut line)? == 0 {
+                writeln!(out)?;
+                return Ok(()); // EOF ends the session, keeping entries so far
+            }
+            let line = line.trim();
+            if line.is_empty() {
+                break; // keep current value (possibly empty)
+            }
+            let value = match parse_field_value(field.kind, line) {
+                Ok(v) => v,
+                Err(e) => {
+                    writeln!(out, "  ✗ {e:#}")?;
+                    continue;
+                }
+            };
+            // Live constraint check over the *whole* environment, so
+            // cross-field constraints react immediately.
+            let mut trial = inputs.clone();
+            trial.insert(field.id.clone(), value.clone());
+            let env = evaluate_computed(fields, &trial)?;
+            let violation = check_constraints(fields, &env)
+                .into_iter()
+                .find(|v| v.field == field.id);
+            match violation {
+                Some(v) => {
+                    writeln!(out, "  ✗ {}", v.message)?;
+                    continue;
+                }
+                None => {
+                    inputs.insert(field.id.clone(), value);
+                    break;
+                }
+            }
+        }
+    }
+    // Show derived results so the user sees what they signed up for.
+    let env = evaluate_computed(fields, inputs)?;
+    for field in fields.iter().filter(|f| f.computed.is_some()) {
+        if let Some(v) = env.get(&field.id) {
+            writeln!(
+                out,
+                "{} (computed): {}",
+                field.label.as_deref().unwrap_or(&field.id),
+                v.to_text()
+            )?;
+        }
+    }
     Ok(())
 }
 
@@ -894,5 +1036,82 @@ fn cbor_to_json(v: &vsd_core::cbor::Value) -> serde_json::Value {
         C::Float(x) => serde_json::Number::from_f64(*x)
             .map(J::Number)
             .unwrap_or(J::Null),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Cursor;
+    use vsd_core::compose::Compose;
+    use vsd_core::forms::{ArithOp, CmpOp, Expr};
+    use vsd_core::tree::{Field, FieldKind, Node};
+
+    fn form_doc() -> vsd_core::Document {
+        Compose::new("en")
+            .h1("Order")
+            .node(Node::Field(Field {
+                id: "qty".into(),
+                kind: FieldKind::Number,
+                label: Some("Quantity".into()),
+                required: true,
+                constraint: Some(Expr::Cmp(
+                    CmpOp::Ge,
+                    Box::new(Expr::FieldRef("qty".into())),
+                    Box::new(Expr::Num(1.0)),
+                )),
+                computed: None,
+            }))
+            .node(Node::Field(Field {
+                id: "total".into(),
+                kind: FieldKind::Number,
+                label: Some("Total".into()),
+                required: false,
+                constraint: None,
+                computed: Some(Expr::Arith(
+                    ArithOp::Mul,
+                    vec![Expr::FieldRef("qty".into()), Expr::Num(9.5)],
+                )),
+            }))
+            .profile(Profile::Form)
+            .finish()
+            .unwrap()
+    }
+
+    #[test]
+    fn interactive_fill_reprompts_on_violation_and_shows_computed() {
+        let doc = form_doc();
+        let fields = doc.fields().unwrap();
+        let mut inputs = std::collections::BTreeMap::new();
+        // First answer violates qty >= 1 (re-prompt), second passes.
+        let mut reader = Cursor::new(b"0\n4\n".to_vec());
+        let mut out = Vec::new();
+        interactive_fill(&doc, &fields, &mut inputs, &mut reader, &mut out).unwrap();
+
+        let transcript = String::from_utf8(out).unwrap();
+        assert!(transcript.contains("constraint violated"), "{transcript}");
+        assert!(transcript.contains("Total (computed): 38"), "{transcript}");
+        assert_eq!(
+            inputs.get("qty"),
+            Some(&vsd_core::forms::FieldValue::Num(4.0))
+        );
+
+        // The session result fills cleanly.
+        let r = vsd_core::fill::fill(&doc, &inputs).unwrap();
+        assert!(r.violations.is_empty());
+    }
+
+    #[test]
+    fn interactive_fill_handles_eof_and_bad_numbers() {
+        let doc = form_doc();
+        let fields = doc.fields().unwrap();
+        let mut inputs = std::collections::BTreeMap::new();
+        // Non-numeric answer re-prompts; EOF ends the session gracefully.
+        let mut reader = Cursor::new(b"abc\n".to_vec());
+        let mut out = Vec::new();
+        interactive_fill(&doc, &fields, &mut inputs, &mut reader, &mut out).unwrap();
+        let transcript = String::from_utf8(out).unwrap();
+        assert!(transcript.contains("expected a number"), "{transcript}");
+        assert!(inputs.is_empty());
     }
 }

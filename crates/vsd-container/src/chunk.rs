@@ -79,7 +79,27 @@ pub(crate) fn decompress_payload(stored: &[u8]) -> Result<Vec<u8>> {
     Ok(out)
 }
 
-#[cfg(not(feature = "zstd"))]
+/// Pure-Rust decode path (`zstd-pure`): same bomb guard, no C code —
+/// this is what lets browsers and wasm runtimes read compressed `.vsd`.
+#[cfg(all(not(feature = "zstd"), feature = "zstd-pure"))]
+pub(crate) fn decompress_payload(stored: &[u8]) -> Result<Vec<u8>> {
+    use std::io::Read;
+    let decoder = ruzstd::decoding::StreamingDecoder::new(stored)
+        .map_err(|e| ContainerError::Zstd(e.to_string()))?;
+    let mut out = Vec::new();
+    decoder
+        .take(MAX_CHUNK_LEN + 1)
+        .read_to_end(&mut out)
+        .map_err(|e| ContainerError::Zstd(e.to_string()))?;
+    if out.len() as u64 > MAX_CHUNK_LEN {
+        return Err(ContainerError::Structure(
+            "decompressed chunk exceeds sanity cap".into(),
+        ));
+    }
+    Ok(out)
+}
+
+#[cfg(not(any(feature = "zstd", feature = "zstd-pure")))]
 pub(crate) fn decompress_payload(_stored: &[u8]) -> Result<Vec<u8>> {
     Err(ContainerError::ZstdUnavailable)
 }
@@ -90,35 +110,32 @@ pub fn checksum(payload: &[u8]) -> u64 {
 }
 
 /// Serialize a chunk, compressing if requested (and beneficial).
+/// Compression requires the native `zstd` feature (`zstd-pure` is
+/// decode-only).
 pub fn encode_chunk(
     ctype: ChunkType,
-    mut flags: ChunkFlags,
+    flags: ChunkFlags,
     payload: &[u8],
     compress: bool,
 ) -> Result<Vec<u8>> {
-    let stored: Vec<u8>;
     #[cfg(feature = "zstd")]
-    {
-        if compress {
-            let compressed = zstd::bulk::compress(payload, 9)
-                .map_err(|e| ContainerError::Zstd(e.to_string()))?;
-            if compressed.len() < payload.len() {
-                stored = compressed;
-                flags.0 |= ChunkFlags::ZSTD;
-            } else {
-                stored = payload.to_vec();
-            }
+    let (stored, flags) = if compress {
+        let compressed =
+            zstd::bulk::compress(payload, 9).map_err(|e| ContainerError::Zstd(e.to_string()))?;
+        if compressed.len() < payload.len() {
+            (compressed, ChunkFlags(flags.0 | ChunkFlags::ZSTD))
         } else {
-            stored = payload.to_vec();
+            (payload.to_vec(), flags)
         }
-    }
+    } else {
+        (payload.to_vec(), flags)
+    };
     #[cfg(not(feature = "zstd"))]
-    {
-        if compress {
-            return Err(ContainerError::ZstdUnavailable);
-        }
-        stored = payload.to_vec();
-    }
+    let stored = if compress {
+        return Err(ContainerError::ZstdUnavailable);
+    } else {
+        payload.to_vec()
+    };
 
     let mut out = Vec::with_capacity(stored.len() + CHUNK_OVERHEAD as usize);
     out.extend_from_slice(&(stored.len() as u64).to_le_bytes());

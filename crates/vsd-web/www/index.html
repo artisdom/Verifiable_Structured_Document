@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>VSD in the browser</title>
+  <style>
+    body { font: 16px/1.5 system-ui, sans-serif; max-width: 52rem; margin: 2rem auto; padding: 0 1rem; }
+    h1 { font-size: 1.4rem; }
+    .drop { border: 2px dashed #bbb; border-radius: 8px; padding: 1.2rem; color: #666; margin: 1rem 0; }
+  </style>
+  <script type="module" src="vsd-doc.js"></script>
+</head>
+<body>
+  <h1>VSD in the browser — no plugin, no server-side rendering</h1>
+  <p>Everything below runs inside <code>vsd_web.wasm</code>: strict
+  container verification, validation, layout recomputation, and
+  rasterization. The badge tells you whether what you see provably
+  matches what the document says.</p>
+
+  <div class="drop">
+    Open a local document:
+    <input type="file" accept=".vsd" id="picker">
+  </div>
+  <div id="slot"></div>
+
+  <script type="module">
+    // Local-file mode: serve the picked file to <vsd-doc> via a blob URL.
+    document.getElementById("picker").addEventListener("change", (e) => {
+      const file = e.target.files[0];
+      if (!file) return;
+      const el = document.createElement("vsd-doc");
+      el.setAttribute("src", URL.createObjectURL(file));
+      const slot = document.getElementById("slot");
+      slot.replaceChildren(el);
+    });
+  </script>
+
+  <!-- Static usage: <vsd-doc src="agreement.vsd"></vsd-doc> -->
+</body>
+</html>

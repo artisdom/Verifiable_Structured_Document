@@ -88,6 +88,24 @@ pub fn render_page_png(doc: &Document, page: &Page, dpi: f64) -> Result<Vec<u8>>
         .map_err(|e| RenderError::Encode(e.to_string()))
 }
 
+/// Draw a UI label with the engine font (used by viewers for chrome
+/// like verification banners — same pinned face as document text).
+pub fn draw_label(
+    pixmap: &mut Pixmap,
+    x_px: f64,
+    baseline_px: f64,
+    size_px: f64,
+    color: [u8; 4],
+    text: &str,
+) {
+    draw_text(pixmap, x_px, baseline_px, size_px, color, text);
+}
+
+/// Fill an axis-aligned rectangle (viewer chrome / highlights).
+pub fn fill_rect_px(pixmap: &mut Pixmap, x: f64, y: f64, w: f64, h: f64, color: [u8; 4]) {
+    draw_rect(pixmap, x, y, w, h, color);
+}
+
 fn rgba(c: [u8; 4]) -> Color {
     Color::from_rgba8(c[0], c[1], c[2], c[3])
 }

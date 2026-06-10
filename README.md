@@ -40,7 +40,9 @@ four properties that matter and removes the failure modes by construction:
 | [`vsd-layout`](crates/vsd-layout) | The reference layout engine **vsd-layout/1.0**: a deterministic projection from content tree to display lists — integer-µm arithmetic, pinned Noto Sans, normative contract in [docs/LAYOUT-1.0.md](docs/LAYOUT-1.0.md) |
 | [`vsd-render`](crates/vsd-render) | Rasterizer: display-list pages → PNG via tiny-skia, drawing with the same pinned font the engine measured with |
 | [`vsd-pdf`](crates/vsd-pdf) | PDF interop: deterministic **tagged** PDF export with the canonical `.vsd` embedded (hybrid PDF — round trips losslessly, verifiable by document id); import with hybrid recovery + pluggable structure recovery for foreign PDFs |
-| [`vsd-cli`](crates/vsd-cli) | The `vsd` tool: `pack` (JSON/Markdown), `info`, `validate`, `extract`, `objects`, `keygen`, `sign`, `verify [--recompute]`, `redact`, `diff`, `fill`, `flatten`, `layout`, `render`, `export`, `import`, `migrate` |
+| [`vsd-view`](crates/vsd-view) | Native viewer: page nav, zoom, exact search with highlights, copy — and the **verification banner** (validate + signatures + layout recomputation) as the first thing on screen |
+| [`vsd-web`](crates/vsd-web) | The browser viewer: the full verify+layout+render stack as WASM behind a tiny C ABI, consumed by a dependency-free `<vsd-doc>` web component — no plugin, no install |
+| [`vsd-cli`](crates/vsd-cli) | The `vsd` tool: `pack` (JSON/Markdown), `info`, `validate`, `extract`, `objects`, `keygen`, `sign`, `verify [--recompute]`, `redact`, `diff [--html]`, `fill [--interactive]`, `flatten`, `layout`, `render`, `export`, `import`, `migrate` |
 
 ## Quick start
 
@@ -122,6 +124,19 @@ $ vsd migrate ./docs -o ./vsd-docs
 migrated 4 document(s), 0 failure(s)
 objects: 12 total across documents, 8 unique (33.3% shared)
 ```
+
+And read them anywhere — natively or in any browser:
+
+```console
+$ vsd-view agreement-laid.vsd        # native viewer; verification banner first
+$ vsd diff old.vsd new.vsd --html redline.html   # reviewable redline, no JS
+```
+
+![vsd-view: the verification banner is the first thing on screen](docs/vsd-view.png)
+
+The same stack compiles to WASM ([crates/vsd-web](crates/vsd-web)): a
+`<vsd-doc src="file.vsd">` web component verifies, lays out, and renders
+documents entirely client-side, badge included.
 
 ## Library use
 
@@ -246,12 +261,28 @@ CLI.
   text on images enforced, HTML passthrough deliberately dropped.
 - **`vsd migrate`**: batch directory conversion with the dedup report.
 
+**Implemented (v0.8, Phase 4 — viewing & authoring):**
+
+- **`vsd-view`** — native viewer with the verification banner as first-class
+  UI (validation + signatures + recomputation on open), exact search with
+  metric-true highlights, zoom, copy. Visually verified
+  ([screenshot](docs/vsd-view.png)); the view-model is GUI-free and tested.
+- **`vsd-web` + `<vsd-doc>`** — the whole verify/layout/render stack in the
+  browser via WASM and ~150 lines of dependency-free JS; pure-Rust zstd
+  decode (`zstd-pure`) so compressed containers open client-side.
+- **`Compose`** — fluent Rust authoring (`.h1().para().table()…`), the
+  high-level API invoice generators actually want.
+- **`vsd diff --html`** — self-contained redline review pages (no JS).
+- **`vsd fill --interactive`** — terminal form filling with live constraint
+  evaluation and computed-field display.
+
 **Not yet implemented (the honest list, spec §13):**
 
 - Layout engine widening (engine 1.1+): RTL/bidi, CJK, complex scripts,
   bold/italic faces, justification/hyphenation, incremental relayout.
   Engine 1.0 refuses what it cannot lay out rather than mis-rendering it.
-- A viewer (`vsd-view`); the WASM viewer track.
+- Python/TypeScript authoring bindings; Pandoc/Typst backends;
+  viewer-integrated form filling; in-browser signature verification.
 - PDF/A-2b export mode; foreign tagged-PDF structure-tree import; richer
   recovery strategies (columns/tables); JPEG→JXL recompression (blocked on
   a pure-Rust JXL encoder).

@@ -41,6 +41,7 @@
 extern crate alloc;
 
 pub mod cbor;
+pub mod compose;
 pub mod diff;
 pub mod document;
 pub mod error;

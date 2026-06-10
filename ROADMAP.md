@@ -42,8 +42,8 @@ Phase 0  Foundations (canonical layer)        ███████████�
 Phase 1  Hardening & ecosystem hygiene        ███████████████████░  SHIPPED (v0.3) — crates.io publish awaits public repo
 Phase 2  The render layer (vsd-layout)        ████████████████░░░░  SHIPPED (v0.5) — minimal profile; widening (2f) + incremental (2g) open
 Phase 3  PDF interop (the adoption wedge)     ██████████████░░░░░░  SHIPPED (v0.7) — export + hybrid round-trip + md on-ramp; rich import (3b/3c) + JXL (3e) open
-Phase 4  Viewing & authoring experience       ░░░░░░░░░░░░░░░░░░░░
-Phase 5  Trust infrastructure at scale        ░░░░░░░░░░░░░░░░░░░░
+Phase 4  Viewing & authoring experience       ████████████░░░░░░░░  SHIPPED (v0.8) — vsd-view, <vsd-doc> WASM viewer, compose API, diff --html, interactive fill; bindings (4c) + Pandoc (4d) open
+Phase 5  Trust infrastructure at scale        ░░░░░░░░░░░░░░░░░░░░  next major effort
 Phase 6  Standardization & governance         ░░░░░░░░░░░░░░░░░░░░
 Moonshots                                     see §10
 ```
@@ -298,29 +298,51 @@ future work alongside PDF/A.
 
 ---
 
-## 7. Phase 4 — Viewing & authoring experience
+## 7. Phase 4 — Viewing & authoring experience ✅ *core shipped as v0.8*
 
 Formats win when reading them is frictionless and producing them is one line.
 
-- [ ] **4a. `vsd-view`**: minimal cross-platform viewer (render cache → GPU
-      via wgpu/softbuffer). Selection, search, copy — all *exact* thanks to
-      display-list back-references. Verification status as a first-class UI
-      element: green "content matches pixels, signed by X" banner.
-- [ ] **4b. WASM viewer** (`vsd-web`): vsd-core+render compiled to WASM; a
-      `<vsd-doc>` web component. View a signed document in any browser with
-      no plugin — *this* is the distribution hack PDF never had: the viewer
-      travels as 200 KB of WASM, not a 200 MB install.
-- [ ] **4c. Authoring libraries**: high-level builder APIs in Rust, then
-      Python (`pyo3`) and TypeScript (napi/WASM) bindings — invoice
-      generators and report pipelines are the highest-volume document
-      producers on earth.
+- [x] **4a. `vsd-view`**: native viewer (winit + softbuffer + the project's
+      own rasterizer — no GPU stack, no toolkit). Page nav, zoom/fit, exact
+      case-insensitive **search with highlights** computed from display-list
+      text runs and the engine's own metrics (not raster heuristics),
+      Ctrl+C copies real page text. The **verification banner is the first
+      thing on screen**: validation + signature verification + layout
+      recomputation run on open ("VERIFIED — N page(s) recomputed, pixels
+      match content · M signature(s) verified" on green, "RENDER CACHE
+      LIES" on red). Visually verified on Windows
+      ([screenshot](docs/vsd-view.png)); the view-model is GUI-free and
+      unit-tested. ☐ Linux/macOS visual passes, smooth scrolling,
+      selection-by-mouse remain open.
+- [x] **4b. WASM viewer** (`vsd-web`): the full stack — strict container
+      verification, validation, **in-browser layout recomputation**, and
+      rasterization — compiled to `wasm32-unknown-unknown` behind a tiny
+      hand-written C ABI (no wasm-bindgen toolchain, no bundler, no npm).
+      The `<vsd-doc>` web component (~150 lines of dependency-free JS)
+      renders every page and shows the verification badge. ~1.1 MB gzipped,
+      over half of which is the pinned Noto Sans the layout contract
+      requires. Enabled by a new pure-Rust zstd decode feature
+      (`vsd-container/zstd-pure`, ruzstd) so compressed containers open in
+      browsers. CI builds it for wasm on every push. ☐ In-browser signature
+      verification (needs a getrandom-free verify path) and a text layer
+      for selection are open.
+- [◐] **4c. Authoring libraries**: the high-level Rust builder shipped
+      (`vsd_core::compose::Compose` — fluent
+      `.h1().para().table().section()` chains, doc-tested). ☐ Python
+      (`pyo3`) and TypeScript (napi/WASM) bindings remain open; they need
+      their own packaging toolchains.
 - [ ] **4d. Typst/LaTeX/Pandoc backends**: emit VSD from existing authoring
       ecosystems (a Pandoc writer alone unlocks dozens of input formats).
-- [ ] **4e. Form filling UX**: `vsd fill` CLI + viewer-integrated forms with
-      live constraint evaluation (the evaluator already exists and provably
-      terminates).
-- [ ] **4f. Diff/review UI**: `vsd diff --html` producing a redline view from
-      the structural diff — contract negotiation without "compare in Word".
+      The Markdown on-ramp (3d) covers the most common case meanwhile.
+- [◐] **4e. Form filling UX**: `vsd fill --interactive` — terminal prompts
+      with **live constraint evaluation** (violations re-prompt with the
+      reason, cross-field constraints react immediately, computed fields
+      display at the end; the prompt loop is reader/writer-generic and
+      unit-tested). ☐ Viewer-integrated form filling remains open.
+- [x] **4f. Diff/review UI**: `vsd diff old new --html out.html` — a
+      self-contained redline view (old text struck through red, new text
+      green) from the structural diff, with the amendment-chain check as a
+      badge. Zero JavaScript in the output, by policy.
 
 ---
 
@@ -466,7 +488,7 @@ core spec before a working prototype and an adversarial review.
 | **0.5** ✅ | Rendering | Rasterizer + golden layout-hash conformance (0.4 + 0.5 shipped together as the Phase 2 release; `vsd-view` alpha moved to Phase 4a where it belongs) |
 | **0.6** ✅ | PDF export | Tagged deterministic VSD→PDF with hybrid embedded source (PDF/A mode still open) |
 | **0.7** ✅ | PDF import | Hybrid lossless recovery + pluggable heuristic recovery + Markdown on-ramp + `vsd migrate` (0.6 + 0.7 shipped together as the Phase 3 release; foreign tagged-structure import open) |
-| 0.8 | Web + bindings | WASM viewer, Python/TS authoring |
+| **0.8** ✅ | Viewing + web | `vsd-view` native viewer, `<vsd-doc>` WASM viewer, compose API, redline diff, interactive fill (Python/TS bindings moved to the 0.9 cycle) |
 | 0.9 | Trust at scale | X.509, timestamps, hybrid PQ, C2PA |
 | **1.0** | Freeze | Spec 1.0, two implementations, audit complete, ISO/W3C track |
 

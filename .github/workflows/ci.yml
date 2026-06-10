@@ -64,6 +64,10 @@ jobs:
         run: cargo check -p vsd-core --no-default-features --target thumbv7em-none-eabihf
       - name: vsd-core builds for wasm (browser viewer track)
         run: cargo check -p vsd-core --target wasm32-unknown-unknown
+      - name: vsd-web (the browser viewer) builds for wasm
+        run: cargo check -p vsd-web --target wasm32-unknown-unknown
+      - name: vsd-container pure-Rust decode path
+        run: cargo check -p vsd-container --no-default-features --features zstd-pure
 
   docs:
     name: rustdoc (broken links are errors)

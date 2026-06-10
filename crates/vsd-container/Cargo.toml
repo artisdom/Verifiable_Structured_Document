@@ -13,12 +13,16 @@ categories.workspace = true
 [features]
 default = ["zstd"]
 zstd = ["dep:zstd"]
+# Pure-Rust zstd *decompression* (no C toolchain, wasm-friendly).
+# Readers work fully; writing compressed chunks still requires `zstd`.
+zstd-pure = ["dep:ruzstd"]
 
 [dependencies]
 vsd-core = { workspace = true, features = ["std"] }
 blake3 = { workspace = true }
 thiserror = { workspace = true }
 zstd = { workspace = true, optional = true }
+ruzstd = { version = "0.8", optional = true }
 
 [package.metadata.docs.rs]
 all-features = true
