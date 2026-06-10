@@ -126,6 +126,10 @@ let bytes = write_document(&doc, &[], &WriteOptions::default())?;
 
 ## Status and roadmap
 
+See **[ROADMAP.md](ROADMAP.md)** for the full design rationale, phased
+implementation plan, release train, and the long-horizon feature list.
+Summary:
+
 **Implemented (v0.1):** the canonical layer end to end — deterministic
 encoding, content addressing, container I/O with full integrity verification,
 validation with accessibility as a validity condition, Ed25519 signing with
