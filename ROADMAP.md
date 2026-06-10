@@ -43,8 +43,8 @@ Phase 1  Hardening & ecosystem hygiene        ███████████�
 Phase 2  The render layer (vsd-layout)        ████████████████░░░░  SHIPPED (v0.5) — minimal profile; widening (2f) + incremental (2g) open
 Phase 3  PDF interop (the adoption wedge)     ██████████████░░░░░░  SHIPPED (v0.7) — export + hybrid round-trip + md on-ramp; rich import (3b/3c) + JXL (3e) open
 Phase 4  Viewing & authoring experience       ████████████░░░░░░░░  SHIPPED (v0.8) — vsd-view, <vsd-doc> WASM viewer, compose API, diff --html, interactive fill; bindings (4c) + Pandoc (4d) open
-Phase 5  Trust infrastructure at scale        ░░░░░░░░░░░░░░░░░░░░  next major effort
-Phase 6  Standardization & governance         ░░░░░░░░░░░░░░░░░░░░
+Phase 5  Trust infrastructure at scale        █████████████░░░░░░░  SHIPPED (v0.9) — hybrid PQ, tlog, selective disclosure, cert binding; full PKI (5a) + C2PA serialization (5c) + salting (5f) open
+Phase 6  Standardization & governance         ░░░░░░░░░░░░░░░░░░░░  next major effort
 Moonshots                                     see §10
 ```
 
@@ -346,30 +346,60 @@ Formats win when reading them is frictionless and producing them is one line.
 
 ---
 
-## 8. Phase 5 — Trust infrastructure at scale
+## 8. Phase 5 — Trust infrastructure at scale ✅ *core shipped as v0.9*
 
 The features that make institutions — not individuals — switch.
 
-- [ ] **5a. X.509 chain validation** + RFC 3161 timestamps (wire format
-      already reserves both); eIDAS-friendly profile for EU qualified
-      signatures.
-- [ ] **5b. Post-quantum signatures**: ML-DSA-65, hybrid-by-default
-      (Ed25519+ML-DSA in one signature block). Documents signed today must
-      verify in 2050 — archival is the one domain where PQ is not optional.
-- [ ] **5c. C2PA provenance interop**: map §8 assertions onto C2PA claims;
-      `ai-generated {model, params-hash}` assertions ride the regulatory
-      wave (EU AI Act transparency, agency procurement checklists).
-- [ ] **5d. Transparency log** (RFC 6962-style): optional append-only log of
-      document ids; "this contract existed, in exactly this form, at this
-      time" without escrowing content. Redaction proofs anchor to it.
-- [ ] **5e. Object-store CDN protocol**: content-addressed objects are
-      `Cache-Control: immutable` by hash; a corpus-wide shared store means an
-      enterprise serves a million invoices from one deduplicated object pool.
-      Define the (trivial) HTTP conventions; ship a reference server.
-- [ ] **5f. Selective disclosure (research → spec)**: because the tree is a
-      Merkle structure, "reveal §3 to the auditor, prove it belongs to the
-      signed whole, disclose nothing else" is a Merkle-path proof away.
-      Salted subtree hashing to prevent sibling-hash content guessing.
+- [◐] **5a. X.509 + RFC 3161**: certificate **binding** shipped —
+      `vsd sign --cert` attaches a PEM/DER certificate, and verification
+      checks the cert's SubjectPublicKeyInfo carries exactly the signing
+      key (for hybrid signatures: the Ed25519 component, which today's
+      PKI can certify) plus the validity window against a
+      verifier-supplied time (the format has no clock). This kills the
+      cheap lie — presenting someone else's certificate next to your
+      key. ☐ Full chain-path validation to trust anchors, revocation,
+      RFC 3161 timestamp tokens, and the eIDAS profile remain open.
+- [x] **5b. Post-quantum signatures, hybrid-by-default**:
+      `vsd keygen --algorithm hybrid` → Ed25519 **and** ML-DSA-65
+      (FIPS 204, pure-Rust `fips204`) over the identical
+      domain-separated message, concatenated in one signature block
+      (`hybrid-ed25519-ml-dsa-65`, ~3.4 KB). **Both components must
+      verify** — an attacker needs to break Ed25519 *and* ML-DSA.
+      Pure-PQ alone is deliberately not offered: it would inherit
+      implementation immaturity without a classical backstop. Tamper
+      tests cover each component independently.
+- [◐] **5c. C2PA provenance interop**: assertion authoring shipped —
+      `vsd provenance add --kind ai-generated --claim model=…` appends
+      to the chain (successor document, predecessor-linked, anchoring
+      the prior manifest hash per spec §8); `vsd provenance show` lists
+      the chain. ☐ Serializing to actual C2PA JUMBF/COSE containers
+      remains open.
+- [x] **5d. Transparency log** (`vsd-tlog`): RFC 6962 Merkle tree over
+      document ids with BLAKE3 — inclusion proofs, consistency proofs
+      (append-only verifiable: rewriting history is detected, tested),
+      Ed25519-signed tree heads with their own domain separation, and a
+      dead-simple append-only file format. CLI: `vsd tlog append | head
+      [--key] | prove`. "This contract existed, in exactly this form,
+      when head N was signed" — without the log ever holding content.
+- [◐] **5e. Object-store CDN protocol**: conventions specified in
+      [docs/OBJECT-STORE-HTTP.md](docs/OBJECT-STORE-HTTP.md) — `/vsd/o/{id}`
+      immutable-cached objects, client-side verification as the trust
+      model (a lying CDN can deny service, never substitute content),
+      range-request container access, corpus-level dedup. Any static
+      host implements it today. ☐ The reference server binary remains
+      open.
+- [◐] **5f. Selective disclosure**: shipped on existing Merkle
+      mechanics, no novel crypto — `vsd seal` hoists top-level blocks
+      into subtree objects; `vsd disclose --index N` emits a bundle
+      (manifest + root skeleton + one subtree) in which **siblings
+      travel as 32-byte hashes only**; `vsd verify-disclosure` recomputes
+      the chain up to the document id — the same id signatures and tlog
+      entries commit to. Tested: sibling content provably absent from
+      bundle bytes; substituted/moved/flipped subtrees all rejected.
+      ☐ **Salted subtree hashing** (so guessable siblings can't be
+      confirmed by hashing the guess) is the remaining format addition;
+      unsalted disclosure is documented as unsuitable where confirmation
+      is itself a leak.
 
 ---
 
@@ -489,7 +519,7 @@ core spec before a working prototype and an adversarial review.
 | **0.6** ✅ | PDF export | Tagged deterministic VSD→PDF with hybrid embedded source (PDF/A mode still open) |
 | **0.7** ✅ | PDF import | Hybrid lossless recovery + pluggable heuristic recovery + Markdown on-ramp + `vsd migrate` (0.6 + 0.7 shipped together as the Phase 3 release; foreign tagged-structure import open) |
 | **0.8** ✅ | Viewing + web | `vsd-view` native viewer, `<vsd-doc>` WASM viewer, compose API, redline diff, interactive fill (Python/TS bindings moved to the 0.9 cycle) |
-| 0.9 | Trust at scale | X.509, timestamps, hybrid PQ, C2PA |
+| **0.9** ✅ | Trust at scale | Hybrid PQ signatures, transparency log, selective disclosure, cert binding, provenance authoring (full PKI chains + RFC 3161 + C2PA serialization carry into the 1.0 cycle) |
 | **1.0** | Freeze | Spec 1.0, two implementations, audit complete, ISO/W3C track |
 
 *Versioning policy:* the format major version and the crate versions decouple

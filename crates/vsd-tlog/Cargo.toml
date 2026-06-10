@@ -1,0 +1,21 @@
+[package]
+name = "vsd-tlog"
+description = "Transparency log for VSD document identities: RFC 6962-style Merkle tree with inclusion and consistency proofs and signed tree heads."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+keywords.workspace = true
+categories.workspace = true
+
+[dependencies]
+vsd-core = { workspace = true, features = ["std"] }
+blake3 = { workspace = true }
+ed25519-dalek = { workspace = true }
+thiserror = { workspace = true, features = ["std"] }
+hex = { workspace = true, features = ["std"] }
+
+[package.metadata.docs.rs]
+all-features = true

@@ -17,6 +17,11 @@ ed25519-dalek = { workspace = true }
 rand_core = { workspace = true }
 thiserror = { workspace = true }
 hex = { workspace = true }
+# FIPS 204 ML-DSA (pure Rust) for hybrid post-quantum signatures.
+fips204 = "0.4"
+# X.509 parsing for certificate binding (5a).
+x509-cert = { version = "0.2", features = ["pem"] }
+der = "0.7"
 
 [package.metadata.docs.rs]
 all-features = true

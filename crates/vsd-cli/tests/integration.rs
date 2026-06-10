@@ -705,6 +705,103 @@ fn redaction_invalidates_render_cache_and_relayout_recovers() {
 }
 
 #[test]
+fn hybrid_signature_lifecycle_through_container() {
+    let doc = sample_document();
+    let key = vsd_sign::HybridSigningKey::generate().unwrap();
+    let sig = key.sign_document(&doc).unwrap();
+
+    // Survives the container round trip and verifies.
+    let bytes = write_document(&doc, &[sig], &WriteOptions::default()).unwrap();
+    let loaded = read_document(&bytes, &ReadOptions::default()).unwrap();
+    assert_eq!(
+        loaded.signatures[0].alg,
+        vsd_container::SigAlg::HybridEd25519MlDsa65
+    );
+    assert_eq!(
+        vsd_sign::verify(&loaded.document, &loaded.signatures[0]).unwrap(),
+        vsd_sign::Verdict::Valid
+    );
+
+    // A signature from different content is bound to its own target.
+    let other = {
+        let mut d = sample_document();
+        let meta = d
+            .store
+            .put_value(
+                &Metadata {
+                    title: Some("Other".into()),
+                    ..Default::default()
+                }
+                .to_value(),
+            )
+            .unwrap();
+        d.manifest.metadata = meta;
+        d
+    };
+    let foreign = key.sign_document(&other).unwrap();
+    assert_eq!(
+        vsd_sign::verify(&doc, &foreign).unwrap(),
+        vsd_sign::Verdict::ValidForOtherTarget
+    );
+}
+
+#[test]
+fn transparency_log_anchors_document_history() {
+    // Blank → filled → flattened: log each revision, prove inclusion of
+    // all three, and prove the log only ever grew.
+    let doc = sample_document();
+    let redacted = vsd_core::redact::redact(&doc, &[1, 1], None)
+        .unwrap()
+        .document;
+
+    let mut log = vsd_tlog::Log::new();
+    log.append(doc.document_id().unwrap().0);
+    let old_size = log.size();
+    let old_root = log.root();
+
+    log.append(redacted.document_id().unwrap().0);
+    let n = log.size();
+    let root = log.root();
+
+    // Inclusion of both revisions.
+    for (i, d) in [&doc, &redacted].iter().enumerate() {
+        let proof = log.inclusion_proof(i as u64, n).unwrap();
+        vsd_tlog::verify_inclusion(&d.document_id().unwrap().0, i as u64, n, &proof, &root)
+            .unwrap();
+    }
+    // Append-only consistency from size 1 to size 2.
+    let cproof = log.consistency_proof(old_size, n).unwrap();
+    vsd_tlog::verify_consistency(old_size, n, &old_root, &root, &cproof).unwrap();
+}
+
+#[test]
+fn sealed_disclosure_round_trip_with_signature() {
+    // The 5f story end to end: seal, sign the sealed doc, disclose one
+    // block; the verifier checks the disclosure against the *signed* id.
+    let doc = sample_document();
+    let sealed = vsd_core::disclose::seal(&doc).unwrap();
+    let key = vsd_sign::SigningKey::generate();
+    let sig = key.sign_document(&sealed).unwrap();
+    assert_eq!(
+        vsd_sign::verify(&sealed, &sig).unwrap(),
+        vsd_sign::Verdict::Valid
+    );
+
+    let bundle = vsd_core::disclose::disclose(&sealed, 0).unwrap();
+    let encoded = bundle.encode().unwrap();
+
+    // Receiver side: decode, verify against the signed document id.
+    let decoded = vsd_core::disclose::Disclosure::decode(&encoded).unwrap();
+    let verified =
+        vsd_core::disclose::verify_disclosure(&decoded, Some(sealed.document_id().unwrap()))
+            .unwrap();
+    assert!(matches!(verified.subtree, Node::Heading(_)));
+    // The confidential paragraph (in a hidden sibling) must not leak.
+    let secret = b"12-3456-789";
+    assert!(!encoded.windows(secret.len()).any(|w| w == secret));
+}
+
+#[test]
 fn subtree_signature_scope() {
     let doc = sample_document();
     let key = vsd_sign::SigningKey::generate();

@@ -71,6 +71,18 @@ fuzz target drives the lazy path.
 | Scope confusion (subtree sig presented as document sig) | Scope byte is part of the signed message; unit-tested both directions |
 | Shadow attack (signature from revision A presented on revision B) | Target binding: verification distinguishes `Valid` from `ValidForOtherTarget`; amendment chains are explicit via `predecessor` |
 | Algorithm confusion | `alg` is part of the signature object; only implemented algorithms verify, others error |
+| Quantum adversary against archived signatures | Hybrid `hybrid-ed25519-ml-dsa-65`: Ed25519 + ML-DSA-65 (FIPS 204) over the identical message; **both** must verify, so the attacker needs both breaks. Pure-PQ alone deliberately not offered (no classical backstop for implementation immaturity). Component-level tamper tests. |
+| Borrowed certificate (someone else's cert next to your key) | `check_cert_binding`: the cert's SPKI must equal the signing key (Ed25519 component for hybrid); validity window enforced against verifier-supplied time. Full chain-path validation/revocation remain open (ROADMAP 5a) and are documented as such — binding ≠ PKI trust. |
+
+### 4b. Transparency log (`vsd-tlog`) and selective disclosure — A2, A4
+
+| Threat | Mitigation |
+|---|---|
+| Log operator rewrites history | RFC 6962 consistency proofs: any append-only violation between two signed tree heads is detectable (tested with a forged-history log) |
+| Forged inclusion | Inclusion proofs recompute to the signed head; wrong entries rejected (exhaustively tested across sizes/indices) |
+| Tree-head forgery | Heads are Ed25519-signed with their own domain (`VSD-TLOG-v1\0`); size is inside the signed message |
+| Disclosure bundle substitution | `verify_disclosure` recomputes the full hash chain (subtree → root skeleton → manifest → document id) through the strict canonical-form store; swapped/moved/flipped subtrees all fail (tested) |
+| Sibling content leakage from a disclosure | Siblings travel as 32-byte hashes only (byte-scan tested). **Residual**: hashes are unsalted, so a *guessable* sibling can be confirmed by hashing the guess — salted subtree hashing is the tracked fix; unsalted disclosure is documented as unsuitable where confirmation is itself a leak |
 
 ### 5. Redaction (`vsd-core::redact`) — A4
 

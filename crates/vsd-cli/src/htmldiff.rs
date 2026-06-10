@@ -155,6 +155,22 @@ fn fmt_path(path: &[usize]) -> String {
     }
 }
 
+/// Human-readable text of a standalone subtree (no store available —
+/// unresolved refs print as placeholders). Used by `verify-disclosure`.
+pub fn node_plain_text(node: &Node) -> String {
+    // An empty document provides ref-resolution that always misses,
+    // which renders as "[unresolvable subtree]" — correct for a
+    // disclosure bundle, where siblings are deliberately absent.
+    let empty = vsd_core::document::DocumentBuilder::new(Node::Doc(vsd_core::tree::Doc {
+        lang: "und".into(),
+        dir: vsd_core::tree::Direction::Ltr,
+        children: vec![],
+    }))
+    .build()
+    .expect("empty doc");
+    node_text(node, &empty)
+}
+
 /// Human-readable text of a subtree (kind-prefixed for non-text nodes).
 fn node_text(node: &Node, doc: &Document) -> String {
     match node {

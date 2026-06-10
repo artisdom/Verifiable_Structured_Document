@@ -45,9 +45,16 @@ impl SigScope {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SigAlg {
     Ed25519,
-    /// Reserved (spec lists ecdsa-p256 and ml-dsa-65 for PQ readiness);
-    /// not yet implemented by `vsd-sign`.
+    /// Hybrid classical + post-quantum: Ed25519 and ML-DSA-65 over the
+    /// same message, concatenated keys/signatures, BOTH must verify.
+    /// Documents signed today must still verify in 2050 — archival is
+    /// the one domain where PQ is not optional (spec §13.3).
+    HybridEd25519MlDsa65,
+    /// Reserved (spec §7.1); not yet implemented by `vsd-sign`.
     EcdsaP256,
+    /// Reserved: ML-DSA-65 alone. `vsd-sign` deliberately implements
+    /// only the hybrid form — pure-PQ signatures would inherit any
+    /// implementation immaturity without a classical backstop.
     MlDsa65,
 }
 
@@ -55,6 +62,7 @@ impl SigAlg {
     pub fn as_str(self) -> &'static str {
         match self {
             SigAlg::Ed25519 => "ed25519",
+            SigAlg::HybridEd25519MlDsa65 => "hybrid-ed25519-ml-dsa-65",
             SigAlg::EcdsaP256 => "ecdsa-p256",
             SigAlg::MlDsa65 => "ml-dsa-65",
         }
@@ -63,6 +71,7 @@ impl SigAlg {
     pub fn parse(s: &str) -> Result<SigAlg> {
         Ok(match s {
             "ed25519" => SigAlg::Ed25519,
+            "hybrid-ed25519-ml-dsa-65" => SigAlg::HybridEd25519MlDsa65,
             "ecdsa-p256" => SigAlg::EcdsaP256,
             "ml-dsa-65" => SigAlg::MlDsa65,
             other => {

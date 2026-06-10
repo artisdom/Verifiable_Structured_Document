@@ -14,6 +14,7 @@ use clap::{Parser, Subcommand};
 use vsd_container::{read_file, write_file, ReadOptions, SigScope, WriteOptions};
 use vsd_core::manifest::Profile;
 use vsd_core::validate::Severity;
+use vsd_core::Node;
 
 #[derive(Parser)]
 #[command(
@@ -56,21 +57,31 @@ enum Command {
     },
     /// List every object in the store with sizes.
     Objects { file: PathBuf },
-    /// Generate an Ed25519 keypair.
+    /// Generate a signing keypair.
     Keygen {
         /// Output path for the secret key (public key gets .pub appended).
         #[arg(short, long)]
         output: PathBuf,
+        /// ed25519, or hybrid (Ed25519 + ML-DSA-65 post-quantum: both
+        /// components must verify — the posture for documents that must
+        /// outlive the quantum transition).
+        #[arg(long, default_value = "ed25519")]
+        algorithm: String,
     },
     /// Sign a document (whole-document scope) and write a new file.
     Sign {
         file: PathBuf,
-        /// Secret key file from `vsd keygen`.
+        /// Secret key file from `vsd keygen` (ed25519 or hybrid,
+        /// detected automatically).
         #[arg(short, long)]
         key: PathBuf,
         /// Output path (defaults to overwriting the input).
         #[arg(short, long)]
         output: Option<PathBuf>,
+        /// X.509 certificate (PEM or DER) to attach; it must certify
+        /// the signing key (binding is checked on verify).
+        #[arg(long)]
+        cert: Option<PathBuf>,
     },
     /// Verify container integrity, document validity, and all signatures.
     Verify {
@@ -173,6 +184,80 @@ enum Command {
         #[arg(long, default_value = "core")]
         profile: String,
     },
+    /// Merkle-ize the document: hoist top-level blocks into subtree
+    /// objects so individual blocks can be selectively disclosed.
+    Seal {
+        file: PathBuf,
+        #[arg(short, long)]
+        output: PathBuf,
+    },
+    /// Produce a selective-disclosure bundle for one top-level block:
+    /// proves the block belongs to the document id while siblings stay
+    /// hidden (as hashes). Requires a sealed document.
+    Disclose {
+        file: PathBuf,
+        /// Top-level block index (see `vsd extract`).
+        #[arg(long)]
+        index: u64,
+        #[arg(short, long)]
+        output: PathBuf,
+    },
+    /// Verify a disclosure bundle and print the disclosed content.
+    VerifyDisclosure {
+        bundle: PathBuf,
+        /// Document id (hex) the bundle must prove membership of.
+        #[arg(long)]
+        expect: Option<String>,
+    },
+    /// Transparency log operations (RFC 6962-style, see vsd-tlog).
+    #[command(subcommand)]
+    Tlog(TlogCommand),
+    /// Show or extend the provenance chain (spec §8).
+    #[command(subcommand)]
+    Provenance(ProvenanceCommand),
+}
+
+#[derive(Subcommand)]
+enum TlogCommand {
+    /// Append a document's id to the log (created if missing).
+    Append {
+        /// Log file path.
+        #[arg(long)]
+        log: PathBuf,
+        file: PathBuf,
+    },
+    /// Print the tree head; sign it when a key is supplied.
+    Head {
+        #[arg(long)]
+        log: PathBuf,
+        /// Ed25519 key file (from `vsd keygen`) to sign the head.
+        #[arg(long)]
+        key: Option<PathBuf>,
+    },
+    /// Prove (and verify) a document's inclusion in the log.
+    Prove {
+        #[arg(long)]
+        log: PathBuf,
+        file: PathBuf,
+    },
+}
+
+#[derive(Subcommand)]
+enum ProvenanceCommand {
+    /// List the assertions in the provenance chain.
+    Show { file: PathBuf },
+    /// Append an assertion (e.g. --kind ai-generated --claim
+    /// model=claude-fable-5), producing a successor document.
+    Add {
+        file: PathBuf,
+        #[arg(long)]
+        kind: String,
+        /// KEY=VALUE claims; repeatable.
+        #[arg(long = "claim", value_name = "KEY=VALUE")]
+        claims: Vec<String>,
+        #[arg(short, long)]
+        output: PathBuf,
+    },
 }
 
 fn main() {
@@ -194,8 +279,13 @@ fn run() -> Result<()> {
         Command::Validate { file } => validate(&file),
         Command::Extract { file, format } => extract(&file, &format),
         Command::Objects { file } => objects(&file),
-        Command::Keygen { output } => keygen(&output),
-        Command::Sign { file, key, output } => sign(&file, &key, output.as_deref()),
+        Command::Keygen { output, algorithm } => keygen(&output, &algorithm),
+        Command::Sign {
+            file,
+            key,
+            output,
+            cert,
+        } => sign(&file, &key, output.as_deref(), cert.as_deref()),
         Command::Verify { file, recompute } => verify(&file, recompute),
         Command::Layout {
             file,
@@ -234,6 +324,17 @@ fn run() -> Result<()> {
             output_dir,
             profile,
         } => migrate(&input_dir, &output_dir, &profile),
+        Command::Seal { file, output } => seal(&file, &output),
+        Command::Disclose {
+            file,
+            index,
+            output,
+        } => disclose_cmd(&file, index, &output),
+        Command::VerifyDisclosure { bundle, expect } => {
+            verify_disclosure_cmd(&bundle, expect.as_deref())
+        }
+        Command::Tlog(cmd) => tlog(cmd),
+        Command::Provenance(cmd) => provenance(cmd),
     }
 }
 
@@ -386,45 +487,94 @@ fn objects(file: &Path) -> Result<()> {
     Ok(())
 }
 
-fn keygen(output: &Path) -> Result<()> {
-    let key = vsd_sign::SigningKey::generate();
-    let pub_path = output.with_extension(format!(
+fn pub_path_for(output: &Path) -> PathBuf {
+    output.with_extension(format!(
         "{}pub",
         output
             .extension()
             .map(|e| format!("{}.", e.to_string_lossy()))
             .unwrap_or_default()
-    ));
-    std::fs::write(output, hex::encode(key.seed()))?;
-    std::fs::write(&pub_path, hex::encode(key.verifying_key().to_bytes()))?;
+    ))
+}
+
+fn keygen(output: &Path, algorithm: &str) -> Result<()> {
+    let pub_path = pub_path_for(output);
+    match algorithm {
+        "ed25519" => {
+            let key = vsd_sign::SigningKey::generate();
+            std::fs::write(output, hex::encode(key.seed()))?;
+            std::fs::write(&pub_path, hex::encode(key.verifying_key().to_bytes()))?;
+            println!("ed25519 keypair");
+        }
+        "hybrid" => {
+            let key = vsd_sign::HybridSigningKey::generate()?;
+            std::fs::write(output, hex::encode(key.to_bytes()))?;
+            std::fs::write(&pub_path, hex::encode(key.public_key_bytes()))?;
+            println!(
+                "hybrid Ed25519 + ML-DSA-65 keypair — both components must verify; \
+                 signatures are ~{} KB",
+                vsd_sign::hybrid::SIG_LEN / 1024 + 1
+            );
+        }
+        other => bail!("unknown algorithm {other:?} (use ed25519 or hybrid)"),
+    }
     println!(
-        "secret key: {}\npublic key: {} ({})",
+        "secret key: {}\npublic key: {}",
         output.display(),
-        pub_path.display(),
-        hex::encode(key.verifying_key().to_bytes())
+        pub_path.display()
     );
     println!("keep the secret key offline; only the .pub needs distribution");
     Ok(())
 }
 
-fn read_key(path: &Path) -> Result<vsd_sign::SigningKey> {
-    let hex_str =
-        std::fs::read_to_string(path).with_context(|| format!("reading key {}", path.display()))?;
-    let seed = hex::decode(hex_str.trim()).context("key file must be hex")?;
-    Ok(vsd_sign::SigningKey::from_seed(&seed)?)
+/// A signing key of either supported algorithm, detected by length.
+enum AnyKey {
+    Ed25519(Box<vsd_sign::SigningKey>),
+    Hybrid(Box<vsd_sign::HybridSigningKey>),
 }
 
-fn sign(file: &Path, key: &Path, output: Option<&Path>) -> Result<()> {
+fn read_key(path: &Path) -> Result<AnyKey> {
+    let hex_str =
+        std::fs::read_to_string(path).with_context(|| format!("reading key {}", path.display()))?;
+    let bytes = hex::decode(hex_str.trim()).context("key file must be hex")?;
+    match bytes.len() {
+        32 => Ok(AnyKey::Ed25519(Box::new(vsd_sign::SigningKey::from_seed(
+            &bytes,
+        )?))),
+        n if n == 32 + vsd_sign::hybrid::ML_SK_LEN + vsd_sign::hybrid::ML_PK_LEN => Ok(
+            AnyKey::Hybrid(Box::new(vsd_sign::HybridSigningKey::from_bytes(&bytes)?)),
+        ),
+        n => bail!("unrecognized key length {n} bytes"),
+    }
+}
+
+fn sign(file: &Path, key: &Path, output: Option<&Path>, cert: Option<&Path>) -> Result<()> {
     let vsd = load(file)?;
-    let key = read_key(key)?;
-    let sig = key.sign_document(&vsd.document)?;
+    let mut sig = match read_key(key)? {
+        AnyKey::Ed25519(k) => k.sign_document(&vsd.document)?,
+        AnyKey::Hybrid(k) => k.sign_document(&vsd.document)?,
+    };
+    if let Some(cert_path) = cert {
+        sig.cert = Some(
+            std::fs::read(cert_path)
+                .with_context(|| format!("reading certificate {}", cert_path.display()))?,
+        );
+        // Fail fast on a cert that does not certify this key.
+        let binding = vsd_sign::check_cert_binding(&sig, None)?;
+        println!(
+            "certificate bound: {} (issuer {}, valid {}..{})",
+            binding.subject, binding.issuer, binding.not_before, binding.not_after
+        );
+    }
+    let alg = sig.alg;
     let mut sigs = vsd.signatures.clone();
     sigs.push(sig);
     let out = output.unwrap_or(file);
     write_file(out, &vsd.document, &sigs, &WriteOptions::default())?;
     println!(
-        "signed {} (document id {})\nsignatures now: {}",
+        "signed {} with {} (document id {})\nsignatures now: {}",
         out.display(),
+        alg.as_str(),
         vsd.document_id,
         sigs.len()
     );
@@ -519,14 +669,31 @@ fn verify(file: &Path, recompute: bool) -> Result<()> {
             }
         };
         println!(
-            "signature {i} : [{}] key {}… → {desc}",
+            "signature {i} : [{} {}] key {}… → {desc}",
             match sig.scope {
                 SigScope::Document => "document",
                 SigScope::Subtree => "subtree",
                 SigScope::FieldLayer => "field-layer",
             },
+            sig.alg.as_str(),
             &hex::encode(&sig.pubkey)[..16]
         );
+        if sig.cert.is_some() {
+            match vsd_sign::check_cert_binding(sig, None) {
+                Ok(b) => println!(
+                    "              cert: {} (issuer {}{}, valid {}..{})",
+                    b.subject,
+                    b.issuer,
+                    if b.self_signed { ", self-signed" } else { "" },
+                    b.not_before,
+                    b.not_after
+                ),
+                Err(e) => {
+                    all_ok = false;
+                    println!("              cert: INVALID — {e}");
+                }
+            }
+        }
     }
 
     if recompute {
@@ -1037,6 +1204,181 @@ fn cbor_to_json(v: &vsd_core::cbor::Value) -> serde_json::Value {
             .map(J::Number)
             .unwrap_or(J::Null),
     }
+}
+
+fn seal(file: &Path, output: &Path) -> Result<()> {
+    let vsd = load(file)?;
+    let sealed = vsd_core::disclose::seal(&vsd.document)?;
+    write_file(output, &sealed, &[], &WriteOptions::default())?;
+    let Node::Doc(d) = sealed.root_node()? else {
+        unreachable!()
+    };
+    println!(
+        "sealed {} top-level block(s) into subtree objects → {}",
+        d.children.len(),
+        output.display()
+    );
+    println!(
+        "new document id: {} (predecessor: {})\nsign the sealed file; disclosures verify against its id",
+        sealed.document_id()?,
+        vsd.document_id
+    );
+    Ok(())
+}
+
+fn disclose_cmd(file: &Path, index: u64, output: &Path) -> Result<()> {
+    let vsd = load(file)?;
+    let bundle = vsd_core::disclose::disclose(&vsd.document, index)?;
+    std::fs::write(output, bundle.encode()?)?;
+    println!(
+        "disclosure of block {index} of document {} → {}",
+        bundle.doc_id,
+        output.display()
+    );
+    println!("siblings travel as hashes only; verify with `vsd verify-disclosure`");
+    println!(
+        "note: hashes are unsalted in this version — do not use where confirming a \
+         guessed sibling is itself a leak"
+    );
+    Ok(())
+}
+
+fn verify_disclosure_cmd(bundle_path: &Path, expect: Option<&str>) -> Result<()> {
+    let bytes = std::fs::read(bundle_path)?;
+    let bundle = vsd_core::disclose::Disclosure::decode(&bytes)?;
+    let expect_id = expect
+        .map(|s| s.parse::<vsd_core::ObjectId>())
+        .transpose()?;
+    let verified = vsd_core::disclose::verify_disclosure(&bundle, expect_id)?;
+    println!(
+        "PROVEN: block {} belongs to document {}",
+        verified.index, verified.doc_id
+    );
+    println!("hidden siblings: {}", verified.hidden_siblings);
+    println!("--- disclosed content ---");
+    println!("{}", htmldiff::node_plain_text(&verified.subtree));
+    Ok(())
+}
+
+fn tlog(cmd: TlogCommand) -> Result<()> {
+    match cmd {
+        TlogCommand::Append { log, file } => {
+            let vsd = load(&file)?;
+            let mut l = if log.exists() {
+                vsd_tlog::Log::load(&log)?
+            } else {
+                vsd_tlog::Log::new()
+            };
+            let index = l.append(vsd.document_id.0);
+            l.save(&log)?;
+            println!(
+                "appended {} at index {index}\nlog size {} · tree head {}",
+                vsd.document_id,
+                l.size(),
+                hex::encode(l.root())
+            );
+        }
+        TlogCommand::Head { log, key } => {
+            let l = vsd_tlog::Log::load(&log)?;
+            println!("size      : {}", l.size());
+            println!("tree head : {}", hex::encode(l.root()));
+            if let Some(key_path) = key {
+                let AnyKey::Ed25519(k) = read_key(&key_path)? else {
+                    bail!("tree heads are signed with ed25519 keys");
+                };
+                let sth = vsd_tlog::SignedTreeHead::sign_with_seed(&l, &k.seed());
+                let sth_path = log.with_extension("sth");
+                std::fs::write(&sth_path, sth.to_bytes())?;
+                println!("signed head → {}", sth_path.display());
+            }
+        }
+        TlogCommand::Prove { log, file } => {
+            let vsd = load(&file)?;
+            let l = vsd_tlog::Log::load(&log)?;
+            let index = l
+                .entries()
+                .iter()
+                .position(|e| *e == vsd.document_id.0)
+                .with_context(|| format!("{} is not in the log", vsd.document_id))?
+                as u64;
+            let n = l.size();
+            let root = l.root();
+            let proof = l.inclusion_proof(index, n)?;
+            vsd_tlog::verify_inclusion(&vsd.document_id.0, index, n, &proof, &root)?;
+            println!(
+                "INCLUSION PROVEN: {} is entry {index} of {} (tree head {})",
+                vsd.document_id,
+                n,
+                hex::encode(root)
+            );
+            for (i, h) in proof.iter().enumerate() {
+                println!("  path[{i}] {}", hex::encode(h));
+            }
+        }
+    }
+    Ok(())
+}
+
+fn provenance(cmd: ProvenanceCommand) -> Result<()> {
+    match cmd {
+        ProvenanceCommand::Show { file } => {
+            let vsd = load(&file)?;
+            match vsd.document.provenance()? {
+                None => println!("no provenance chain"),
+                Some(p) => {
+                    for (i, a) in p.assertions.iter().enumerate() {
+                        println!("assertion {i}: {} (anchors {})", a.kind, a.manifest_hash);
+                        for (k, v) in &a.claims {
+                            println!("    {k} = {v}");
+                        }
+                    }
+                }
+            }
+        }
+        ProvenanceCommand::Add {
+            file,
+            kind,
+            claims,
+            output,
+        } => {
+            let vsd = load(&file)?;
+            let claims = claims
+                .iter()
+                .map(|c| {
+                    c.split_once('=')
+                        .map(|(k, v)| (k.to_owned(), v.to_owned()))
+                        .with_context(|| format!("--claim {c:?}: expected KEY=VALUE"))
+                })
+                .collect::<Result<Vec<_>>>()?;
+
+            let mut prov = vsd.document.provenance()?.unwrap_or_default();
+            prov.assertions.push(vsd_core::manifest::Assertion {
+                kind: kind.clone(),
+                claims,
+                // Each assertion anchors the manifest hash at this point
+                // in history (spec §8).
+                manifest_hash: vsd.document_id,
+            });
+            let mut store = vsd.document.store.clone();
+            let prov_id = store.put_value(&prov.to_value())?;
+            let manifest = vsd_core::Manifest {
+                provenance: Some(prov_id),
+                predecessor: Some(vsd.document_id),
+                ..vsd.document.manifest.clone()
+            };
+            let mut doc = vsd_core::Document { manifest, store };
+            let keep = doc.closure()?;
+            doc.store.retain_only(&keep);
+            write_file(&output, &doc, &[], &WriteOptions::default())?;
+            println!(
+                "appended {kind:?} assertion → {}\nnew document id: {} (predecessor: {})",
+                output.display(),
+                doc.document_id()?,
+                vsd.document_id
+            );
+        }
+    }
+    Ok(())
 }
 
 #[cfg(test)]

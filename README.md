@@ -40,6 +40,7 @@ four properties that matter and removes the failure modes by construction:
 | [`vsd-layout`](crates/vsd-layout) | The reference layout engine **vsd-layout/1.0**: a deterministic projection from content tree to display lists — integer-µm arithmetic, pinned Noto Sans, normative contract in [docs/LAYOUT-1.0.md](docs/LAYOUT-1.0.md) |
 | [`vsd-render`](crates/vsd-render) | Rasterizer: display-list pages → PNG via tiny-skia, drawing with the same pinned font the engine measured with |
 | [`vsd-pdf`](crates/vsd-pdf) | PDF interop: deterministic **tagged** PDF export with the canonical `.vsd` embedded (hybrid PDF — round trips losslessly, verifiable by document id); import with hybrid recovery + pluggable structure recovery for foreign PDFs |
+| [`vsd-tlog`](crates/vsd-tlog) | Transparency log: RFC 6962-style Merkle tree over document ids — inclusion + consistency proofs, signed tree heads ("this contract existed, in exactly this form, at this time") |
 | [`vsd-view`](crates/vsd-view) | Native viewer: page nav, zoom, exact search with highlights, copy — and the **verification banner** (validate + signatures + layout recomputation) as the first thing on screen |
 | [`vsd-web`](crates/vsd-web) | The browser viewer: the full verify+layout+render stack as WASM behind a tiny C ABI, consumed by a dependency-free `<vsd-doc>` web component — no plugin, no install |
 | [`vsd-cli`](crates/vsd-cli) | The `vsd` tool: `pack` (JSON/Markdown), `info`, `validate`, `extract`, `objects`, `keygen`, `sign`, `verify [--recompute]`, `redact`, `diff [--html]`, `fill [--interactive]`, `flatten`, `layout`, `render`, `export`, `import`, `migrate` |
@@ -276,6 +277,28 @@ CLI.
 - **`vsd fill --interactive`** — terminal form filling with live constraint
   evaluation and computed-field display.
 
+**Implemented (v0.9, Phase 5 — trust infrastructure at scale):**
+
+- **Hybrid post-quantum signatures** (`vsd keygen --algorithm hybrid`):
+  Ed25519 + ML-DSA-65 (FIPS 204) over the same message in one signature —
+  both must verify. Documents signed today still verify in 2050.
+- **Transparency log** (`vsd tlog append | head | prove`): RFC 6962-style
+  Merkle log of document ids with inclusion/consistency proofs and signed
+  tree heads. Rewriting history is mechanically detectable.
+- **Selective disclosure** (`vsd seal` / `disclose` / `verify-disclosure`):
+  reveal one block to an auditor, prove it belongs to the signed document
+  id, siblings travel as hashes only. No novel crypto — the tree already
+  is a Merkle structure.
+- **X.509 certificate binding** (`vsd sign --cert`): the attached cert must
+  certify the signing key (SPKI check) and its validity window is enforced
+  against verifier-supplied time.
+- **Provenance authoring** (`vsd provenance add/show`), including
+  `ai-generated {model, params-hash}` assertions for AI-transparency
+  requirements.
+- **Object-store HTTP conventions** ([docs/OBJECT-STORE-HTTP.md](docs/OBJECT-STORE-HTTP.md)):
+  content-addressed serving any static host can implement; clients verify,
+  CDNs can deny service but never substitute content.
+
 **Not yet implemented (the honest list, spec §13):**
 
 - Layout engine widening (engine 1.1+): RTL/bidi, CJK, complex scripts,
@@ -286,8 +309,9 @@ CLI.
 - PDF/A-2b export mode; foreign tagged-PDF structure-tree import; richer
   recovery strategies (columns/tables); JPEG→JXL recompression (blocked on
   a pure-Rust JXL encoder).
-- X.509 chains, RFC 3161 timestamps, and post-quantum (`ml-dsa-65`) signatures
-  — wire format reserves all three.
+- X.509 chain-path validation to trust anchors and RFC 3161 timestamps
+  (binding shipped; chains/revocation/timestamps open); salted disclosure
+  hashing; C2PA JUMBF serialization; the object-store reference server.
 - crates.io publication (release-ready; awaits the repository going public).
 
 ## Security posture
