@@ -18,6 +18,8 @@ path = "src/main.rs"
 vsd-core = { workspace = true, features = ["std"] }
 vsd-layout = { workspace = true }
 vsd-render = { workspace = true }
+vsd-pdf = { workspace = true }
+pulldown-cmark = { version = "0.12", default-features = false }
 vsd-container = { workspace = true, features = ["zstd"] }
 vsd-sign = { workspace = true }
 clap = { workspace = true }

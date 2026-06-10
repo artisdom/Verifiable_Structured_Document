@@ -39,7 +39,8 @@ four properties that matter and removes the failure modes by construction:
 | [`vsd-sign`](crates/vsd-sign) | Ed25519 signatures over document/subtree Merkle roots, with domain separation (wire format reserves `ecdsa-p256`, `ml-dsa-65`) |
 | [`vsd-layout`](crates/vsd-layout) | The reference layout engine **vsd-layout/1.0**: a deterministic projection from content tree to display lists — integer-µm arithmetic, pinned Noto Sans, normative contract in [docs/LAYOUT-1.0.md](docs/LAYOUT-1.0.md) |
 | [`vsd-render`](crates/vsd-render) | Rasterizer: display-list pages → PNG via tiny-skia, drawing with the same pinned font the engine measured with |
-| [`vsd-cli`](crates/vsd-cli) | The `vsd` tool: `pack`, `info`, `validate`, `extract`, `objects`, `keygen`, `sign`, `verify [--recompute]`, `redact`, `diff`, `fill`, `flatten`, `layout`, `render` |
+| [`vsd-pdf`](crates/vsd-pdf) | PDF interop: deterministic **tagged** PDF export with the canonical `.vsd` embedded (hybrid PDF — round trips losslessly, verifiable by document id); import with hybrid recovery + pluggable structure recovery for foreign PDFs |
+| [`vsd-cli`](crates/vsd-cli) | The `vsd` tool: `pack` (JSON/Markdown), `info`, `validate`, `extract`, `objects`, `keygen`, `sign`, `verify [--recompute]`, `redact`, `diff`, `fill`, `flatten`, `layout`, `render`, `export`, `import`, `migrate` |
 
 ## Quick start
 
@@ -96,6 +97,30 @@ recompute   : OK — 1 page(s) re-laid out, byte-identical to the cache;
 VERIFIED
 
 $ vsd render agreement-laid.vsd --page 1 -o page1.png --dpi 144
+```
+
+PDF is the adoption wedge — and with the hybrid trick, just a transport:
+
+```console
+# Markdown is a first-class on-ramp:
+$ vsd pack README.md -o readme.vsd
+
+# Tagged PDF out; the canonical .vsd rides inside as an attachment:
+$ vsd export readme.vsd -o readme.pdf
+exported readme.vsd → readme.pdf (tagged PDF, canonical .vsd embedded — round trip is lossless)
+
+# Anyone with the PDF gets the original back, identity verified:
+$ vsd import readme.pdf -o readme-back.vsd
+hybrid PDF: recovered the canonical VSD losslessly
+document id: 2e5f618fba9d8e8b… (verified)
+
+# Foreign PDFs go through structure recovery instead — marked lossy in
+# provenance, with the original embedded for legal continuity.
+
+# Batch migration with the content-addressing payoff made visible:
+$ vsd migrate ./docs -o ./vsd-docs
+migrated 4 document(s), 0 failure(s)
+objects: 12 total across documents, 8 unique (33.3% shared)
 ```
 
 ## Library use
@@ -202,14 +227,34 @@ CLI.
   carries a laid-out vector with a golden layout hash, generated on Windows
   and reproduced on Linux/macOS on every push.
 
+**Implemented (v0.7, Phase 3 — PDF interop, the adoption wedge):**
+
+- **Tagged PDF export** (`vsd export`): a from-scratch deterministic PDF
+  writer — real structure tree rebuilt from display-list back-references
+  (H1–H6/P/Code/Caption, figure alt text), embedded CID font with
+  ToUnicode, PNG/JPEG images, document id in PDF metadata. Visually
+  lossless by construction: display lists are a strict subset of PDF's
+  imaging model.
+- **Hybrid PDFs**: the canonical `.vsd` (signatures included) travels
+  inside the exported PDF as an attachment, so `vsd import` recovers the
+  exact original — same document id, signatures still verify. PDF becomes
+  a transport, not a destination; the round trip is the identity function.
+- **Foreign-PDF import** via a pluggable `StructureRecovery` trait (naive
+  text recovery built in), always marked `format-migrated { lossy: true }`
+  in provenance with the original PDF embedded for legal continuity.
+- **Markdown on-ramp**: `vsd pack README.md` (CommonMark + tables); alt
+  text on images enforced, HTML passthrough deliberately dropped.
+- **`vsd migrate`**: batch directory conversion with the dedup report.
+
 **Not yet implemented (the honest list, spec §13):**
 
 - Layout engine widening (engine 1.1+): RTL/bidi, CJK, complex scripts,
   bold/italic faces, justification/hyphenation, incremental relayout.
   Engine 1.0 refuses what it cannot lay out rather than mis-rendering it.
 - A viewer (`vsd-view`); the WASM viewer track.
-- PDF interop converters (PDF→VSD structure recovery; VSD→PDF export — the
-  display lists to export from now exist).
+- PDF/A-2b export mode; foreign tagged-PDF structure-tree import; richer
+  recovery strategies (columns/tables); JPEG→JXL recompression (blocked on
+  a pure-Rust JXL encoder).
 - X.509 chains, RFC 3161 timestamps, and post-quantum (`ml-dsa-65`) signatures
   — wire format reserves all three.
 - crates.io publication (release-ready; awaits the repository going public).

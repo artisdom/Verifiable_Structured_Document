@@ -101,7 +101,16 @@ accepted expression; `backreferences_rejected`, `depth_bounded` tests.
 | Arithmetic overflow | All scaled products go through one 128-bit-intermediate primitive; µm magnitudes for any physical document are ≤ 10⁹, far inside i64 |
 | Engine-version confusion | The cache pins engine name+version; verification of an unknown engine reports `UnknownEngine` rather than silently passing or guessing |
 
-### 8. Supply chain & implementation
+### 8. PDF interop (`vsd-pdf`) — A1
+
+| Threat | Mitigation |
+|---|---|
+| Hostile PDF exploits the importer | The PDF parser (`lopdf`) handles untrusted bytes, but everything it yields is *re-validated*: an embedded `source.vsd` goes through the full strict container/object verification (a tampered embed fails like any tampered `.vsd`); heuristically recovered text becomes ordinary tree nodes subject to validation. The PDF parser can lie about content, never about a VSD identity. |
+| Hybrid substitution (attacker swaps the embedded `.vsd`) | The embedded source is a complete signed container: its document id is recomputed from bytes on import and signatures verify against it. Swapping the embed changes the id and breaks signatures — and the visible PDF pages then disagree with an *honest* re-export, which is diffable. |
+| Export-side injection via document text | PDF string/name contexts are escaped; text is emitted as hex-encoded glyph ids (no literal-string parsing ambiguity); the writer emits no JavaScript, launch actions, or embedded files other than the declared source attachment. |
+| Importer resource exhaustion | Page text extraction is bounded by the PDF's own page count; recovered documents pass through the standard tree/size limits. `lopdf` parsing of pathological PDFs is fuzz-worthy — listed as future fuzz target. |
+
+### 9. Supply chain & implementation
 
 - `#![forbid(unsafe_code)]` in all four crates (compiler-enforced).
 - Dependency surface kept deliberately small: blake3, zstd,

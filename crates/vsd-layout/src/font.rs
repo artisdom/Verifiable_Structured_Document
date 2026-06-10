@@ -7,11 +7,11 @@
 
 use std::sync::OnceLock;
 
-use ttf_parser::{Face, GlyphId};
+use ttf_parser::Face;
 
-// Re-exported for vsd-render, which must use the *same* pinned parser
-// the metrics came from.
-pub use ttf_parser::OutlineBuilder;
+// Re-exported for vsd-render and vsd-pdf, which must use the *same*
+// pinned parser the metrics came from.
+pub use ttf_parser::{GlyphId, OutlineBuilder};
 
 /// The embedded font binary (SHA-256
 /// `478c558ea716033cd60c03438f628dfa75694dcf6b5f6d505a2f05fd2b4f3823`).

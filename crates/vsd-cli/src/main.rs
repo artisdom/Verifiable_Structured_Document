@@ -3,6 +3,7 @@
 #![forbid(unsafe_code)]
 
 mod author;
+mod markdown;
 
 use std::path::{Path, PathBuf};
 
@@ -26,9 +27,10 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
-    /// Create a .vsd from a JSON authoring file.
+    /// Create a .vsd from a JSON authoring file or a Markdown file.
     Pack {
-        /// Input JSON document (see `vsd pack --help` for the dialect).
+        /// Input document: .json (authoring dialect) or .md (CommonMark
+        /// + tables). Format is inferred from the extension.
         input: PathBuf,
         /// Output .vsd path.
         #[arg(short, long)]
@@ -132,6 +134,34 @@ enum Command {
         #[arg(short, long)]
         output: PathBuf,
     },
+    /// Export to tagged PDF. By default the canonical .vsd travels
+    /// inside the PDF as an attachment (hybrid PDF), making the round
+    /// trip back to VSD lossless and verifiable.
+    Export {
+        file: PathBuf,
+        #[arg(short, long)]
+        output: PathBuf,
+        /// Do not embed the source .vsd in the PDF.
+        #[arg(long)]
+        no_embed_source: bool,
+    },
+    /// Import a PDF: lossless if it is a hybrid PDF carrying its VSD
+    /// source; otherwise heuristic structure recovery (marked lossy in
+    /// provenance, original PDF embedded as an attachment).
+    Import {
+        file: PathBuf,
+        #[arg(short, long)]
+        output: PathBuf,
+    },
+    /// Batch-convert a directory of .json/.md/.pdf files to .vsd and
+    /// report cross-document object deduplication.
+    Migrate {
+        input_dir: PathBuf,
+        #[arg(short, long)]
+        output_dir: PathBuf,
+        #[arg(long, default_value = "core")]
+        profile: String,
+    },
 }
 
 fn main() {
@@ -181,6 +211,17 @@ fn run() -> Result<()> {
             strict,
         } => fill(&file, &sets, &output, strict),
         Command::Flatten { file, output } => flatten(&file, &output),
+        Command::Export {
+            file,
+            output,
+            no_embed_source,
+        } => export(&file, &output, no_embed_source),
+        Command::Import { file, output } => import(&file, &output),
+        Command::Migrate {
+            input_dir,
+            output_dir,
+            profile,
+        } => migrate(&input_dir, &output_dir, &profile),
     }
 }
 
@@ -190,12 +231,17 @@ fn load(path: &Path) -> Result<vsd_container::VsdFile> {
 
 fn pack(input: &Path, output: &Path, profile: &str, no_compress: bool) -> Result<()> {
     let profile = Profile::parse(profile)?;
-    let json: serde_json::Value = serde_json::from_str(
-        &std::fs::read_to_string(input).with_context(|| format!("reading {}", input.display()))?,
-    )
-    .context("parsing authoring JSON")?;
     let base = input.parent().unwrap_or(Path::new("."));
-    let doc = author::document_from_json(&json, base, profile)?;
+    let text =
+        std::fs::read_to_string(input).with_context(|| format!("reading {}", input.display()))?;
+    let doc = match input.extension().and_then(|e| e.to_str()) {
+        Some("md") | Some("markdown") => markdown::document_from_markdown(&text, base, profile)?,
+        _ => {
+            let json: serde_json::Value =
+                serde_json::from_str(&text).context("parsing authoring JSON")?;
+            author::document_from_json(&json, base, profile)?
+        }
+    };
 
     // Refuse to write an invalid document.
     let report = vsd_core::validate::validate(&doc);
@@ -639,6 +685,184 @@ fn flatten(file: &Path, output: &Path) -> Result<()> {
         flat.document_id()?,
         vsd.document_id
     );
+    Ok(())
+}
+
+fn export(file: &Path, output: &Path, no_embed_source: bool) -> Result<()> {
+    let bytes = std::fs::read(file).with_context(|| format!("reading {}", file.display()))?;
+    let vsd = vsd_container::read_document(&bytes, &ReadOptions::default())?;
+    let opts = vsd_pdf::ExportOptions {
+        embed_source: !no_embed_source,
+    };
+    let pdf = vsd_pdf::export_pdf(&vsd.document, Some(&bytes), &opts)?;
+    std::fs::write(output, &pdf)?;
+    println!(
+        "exported {} → {} ({} bytes, tagged PDF{})",
+        file.display(),
+        output.display(),
+        pdf.len(),
+        if opts.embed_source {
+            ", canonical .vsd embedded — round trip is lossless"
+        } else {
+            ""
+        }
+    );
+    if !vsd.signatures.is_empty() && opts.embed_source {
+        println!(
+            "{} signature(s) travel inside the embedded source and survive the round trip",
+            vsd.signatures.len()
+        );
+    }
+    Ok(())
+}
+
+fn import(file: &Path, output: &Path) -> Result<()> {
+    let bytes = std::fs::read(file).with_context(|| format!("reading {}", file.display()))?;
+    match vsd_pdf::import_pdf(&bytes, &vsd_pdf::TextRecovery)? {
+        vsd_pdf::ImportOutcome::Lossless {
+            document,
+            signatures,
+            document_id,
+        } => {
+            write_file(output, &document, &signatures, &WriteOptions::default())?;
+            println!(
+                "hybrid PDF: recovered the canonical VSD losslessly → {}",
+                output.display()
+            );
+            println!(
+                "document id: {document_id} (verified), {} signature(s) intact",
+                signatures.len()
+            );
+        }
+        vsd_pdf::ImportOutcome::Recovered {
+            document,
+            pages_read,
+        } => {
+            let report = vsd_core::validate::validate(&document);
+            print_findings(&report);
+            write_file(output, &document, &[], &WriteOptions::default())?;
+            println!(
+                "foreign PDF: heuristic structure recovery over {pages_read} page(s) → {}",
+                output.display()
+            );
+            println!(
+                "marked format-migrated (lossy) in provenance; original PDF embedded as attachment"
+            );
+            println!("document id: {}", document.document_id()?);
+        }
+    }
+    Ok(())
+}
+
+fn migrate(input_dir: &Path, output_dir: &Path, profile: &str) -> Result<()> {
+    use std::collections::BTreeMap;
+
+    let profile = Profile::parse(profile)?;
+    let mut inputs = Vec::new();
+    collect_migratable(input_dir, &mut inputs)?;
+    if inputs.is_empty() {
+        bail!("no .json/.md/.pdf files under {}", input_dir.display());
+    }
+    std::fs::create_dir_all(output_dir)?;
+
+    let mut converted = 0usize;
+    let mut failures = 0usize;
+    let mut sum_objects = 0usize;
+    let mut sum_bytes = 0u64;
+    let mut unique: BTreeMap<vsd_core::ObjectId, u64> = BTreeMap::new();
+
+    for path in &inputs {
+        let rel = path.strip_prefix(input_dir).unwrap_or(path);
+        let out = output_dir.join(rel).with_extension("vsd");
+        if let Some(parent) = out.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        let result = (|| -> Result<vsd_core::Document> {
+            match path.extension().and_then(|e| e.to_str()) {
+                Some("md") | Some("markdown") => {
+                    let text = std::fs::read_to_string(path)?;
+                    markdown::document_from_markdown(
+                        &text,
+                        path.parent().unwrap_or(Path::new(".")),
+                        profile,
+                    )
+                }
+                Some("json") => {
+                    let json: serde_json::Value =
+                        serde_json::from_str(&std::fs::read_to_string(path)?)?;
+                    author::document_from_json(
+                        &json,
+                        path.parent().unwrap_or(Path::new(".")),
+                        profile,
+                    )
+                }
+                Some("pdf") => {
+                    let bytes = std::fs::read(path)?;
+                    match vsd_pdf::import_pdf(&bytes, &vsd_pdf::TextRecovery)? {
+                        vsd_pdf::ImportOutcome::Lossless { document, .. } => Ok(document),
+                        vsd_pdf::ImportOutcome::Recovered { document, .. } => Ok(document),
+                    }
+                }
+                _ => unreachable!("filtered by collect_migratable"),
+            }
+        })();
+        match result {
+            Ok(doc) => {
+                write_file(&out, &doc, &[], &WriteOptions::default())?;
+                sum_objects += doc.store.len();
+                sum_bytes += doc.store.total_bytes();
+                for (id, bytes) in doc.store.iter() {
+                    unique.insert(*id, bytes.len() as u64);
+                }
+                converted += 1;
+                println!("  {} → {}", rel.display(), out.display());
+            }
+            Err(e) => {
+                failures += 1;
+                eprintln!("  {} FAILED: {e:#}", rel.display());
+            }
+        }
+    }
+
+    // The dedup report: the content-addressing payoff, made visible.
+    let unique_bytes: u64 = unique.values().sum();
+    println!("\nmigrated {converted} document(s), {failures} failure(s)");
+    println!(
+        "objects: {} total across documents, {} unique ({:.1}% shared)",
+        sum_objects,
+        unique.len(),
+        if sum_objects > 0 {
+            100.0 * (sum_objects - unique.len()) as f64 / sum_objects as f64
+        } else {
+            0.0
+        }
+    );
+    println!(
+        "canonical bytes: {} summed, {} deduplicated — a shared object store would save {:.1}%",
+        sum_bytes,
+        unique_bytes,
+        if sum_bytes > 0 {
+            100.0 * (sum_bytes - unique_bytes) as f64 / sum_bytes as f64
+        } else {
+            0.0
+        }
+    );
+    Ok(())
+}
+
+fn collect_migratable(dir: &Path, out: &mut Vec<PathBuf>) -> Result<()> {
+    for entry in std::fs::read_dir(dir).with_context(|| format!("reading {}", dir.display()))? {
+        let path = entry?.path();
+        if path.is_dir() {
+            collect_migratable(&path, out)?;
+        } else if matches!(
+            path.extension().and_then(|e| e.to_str()),
+            Some("json") | Some("md") | Some("markdown") | Some("pdf")
+        ) {
+            out.push(path);
+        }
+    }
+    out.sort();
     Ok(())
 }
 

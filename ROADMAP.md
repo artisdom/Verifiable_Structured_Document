@@ -41,7 +41,7 @@ derived; container as dumb transport. Each layer is independently verifiable.
 Phase 0  Foundations (canonical layer)        ████████████████████  SHIPPED (v0.1)
 Phase 1  Hardening & ecosystem hygiene        ███████████████████░  SHIPPED (v0.3) — crates.io publish awaits public repo
 Phase 2  The render layer (vsd-layout)        ████████████████░░░░  SHIPPED (v0.5) — minimal profile; widening (2f) + incremental (2g) open
-Phase 3  PDF interop (the adoption wedge)     ░░░░░░░░░░░░░░░░░░░░  next major effort
+Phase 3  PDF interop (the adoption wedge)     ██████████████░░░░░░  SHIPPED (v0.7) — export + hybrid round-trip + md on-ramp; rich import (3b/3c) + JXL (3e) open
 Phase 4  Viewing & authoring experience       ░░░░░░░░░░░░░░░░░░░░
 Phase 5  Trust infrastructure at scale        ░░░░░░░░░░░░░░░░░░░░
 Phase 6  Standardization & governance         ░░░░░░░░░░░░░░░░░░░░
@@ -240,36 +240,61 @@ list is normative.
 
 ---
 
-## 6. Phase 3 — PDF interop: the adoption wedge
+## 6. Phase 3 — PDF interop: the adoption wedge ✅ *core shipped as v0.7*
 
 Spec §11: *a format without a migration story is a hobby.* Organizations must
 be able to adopt VSD internally with **zero external-compatibility risk**.
 
-- [ ] **3a. VSD → PDF export** (`vsd-pdf-out`): mechanical and lossless by
-      construction — display lists are a strict subset of PDF's imaging
-      model. Emit *tagged* PDF (the structure tree maps directly), making
-      VSD-exported PDFs more accessible than most native ones. PDF/A-2b
-      output mode for statutory archival.
-- [ ] **3b. Tagged-PDF → VSD importer**: structure tree → content tree
-      directly; mark provenance `format-migrated { lossy: false }`.
-- [ ] **3c. Untagged-PDF → VSD structure recovery**: heuristic text/column/
-      table reconstruction (the majority of real PDFs). Always marked
-      `format-migrated { lossy: true }`; optionally embed the source PDF as
-      an attachment object for legal continuity. Design the recovery stage
-      as a pluggable trait so document-understanding models can slot in
-      without entering the trusted core.
-- [ ] **3d. HTML/Markdown → VSD** (`vsd pack --from md`): the cheap on-ramp
-      for the developer ecosystem — every README, invoice template, and
-      static-site pipeline becomes a VSD producer.
-- [ ] **3e. JPEG → JXL lossless recompression** in the importer (~20%
-      smaller, per spec §4) and WOFF2 font subsetting with the normative
-      coverage check.
-- [ ] **3f. `vsd migrate` batch tool**: directory/archive-scale conversion
-      with a dedup report ("your 10,000 invoices share 94% of their objects;
-      archive shrank 11×") — the CFO-legible feature.
+- [x] **3a. VSD → PDF export** (`vsd-pdf`): mechanical and visually lossless
+      by construction — display lists are a strict subset of PDF's imaging
+      model. Ships as a from-scratch deterministic writer (no PDF-library
+      dependency in the trusted output path; same document → same bytes).
+      Emits **tagged** PDF: the structure tree is rebuilt from display-list
+      `node_path` back-references (H1–H6/P/Code/Caption/Formula/Lbl, figure
+      `/Alt` from mandatory alt text), decoration marked as artifacts —
+      more accessible than most native PDFs. Embedded CIDFontType2 (the
+      pinned Noto Sans) with ToUnicode so extraction and copy/paste work;
+      PNG (recompressed Flate) and JPEG (DCT passthrough) images; document
+      identity recorded in PDF metadata (`vsd-doc-id:`).
+      **Plus the hybrid trick**: by default the canonical `.vsd` travels
+      inside the PDF as an attachment, making PDF a *transport* for VSD —
+      the round trip back is the identity function, signatures included,
+      verifiable by document id (tested). ☐ PDF/A-2b output mode (XMP +
+      OutputIntent ICC) remains open.
+- [x] **3c. Pluggable structure recovery** for foreign PDFs: the
+      `StructureRecovery` trait keeps recovery strategies out of the
+      trusted core; the built-in `TextRecovery` is deliberately naive
+      (page text → paragraphs, page-break hints). Output is always marked
+      `format-migrated { lossy: true }` in provenance with the original
+      PDF embedded as an attachment for legal continuity and its hash
+      recorded. ☐ Richer built-ins (column/table reconstruction,
+      document-understanding models) slot into the trait later.
+- [◐] **3b. Tagged-PDF → VSD importer**: *hybrid* PDFs (ours) import
+      losslessly via the embedded source — identity verified, signatures
+      intact. ☐ Walking a foreign PDF's structure tree (StructTreeRoot →
+      content tree) is still open; foreign tagged PDFs currently take the
+      3c recovery path.
+- [x] **3d. Markdown → VSD** (`vsd pack notes.md`): CommonMark + tables via
+      pulldown-cmark — headings, lists, code, tables, quotes, links,
+      emphasis (style table), images (alt text required, enforced). HTML
+      passthrough is deliberately dropped (no foreign content). ☐ A direct
+      HTML importer remains open.
+- [ ] **3e. JPEG → JXL lossless recompression** + WOFF2 subsetting with the
+      normative coverage check. Blocked on a production-grade pure-Rust JXL
+      *encoder* (jxl-oxide is decode-only); revisit when one exists. JPEG
+      already passes through to PDF losslessly via DCTDecode.
+- [x] **3f. `vsd migrate`**: batch-converts a directory tree of
+      .json/.md/.pdf to .vsd and prints the dedup report — total vs unique
+      objects and the bytes a shared object store would save (the
+      CFO-legible feature, e.g. "12 objects total, 8 unique, 21.3% saved"
+      on the demo corpus).
 
-**Exit criteria:** `vsd export doc.vsd -o doc.pdf` produces a PDF that opens
-pixel-correct in Acrobat; round-trip VSD→PDF→VSD preserves the content tree.
+**Exit criteria — met for the hybrid path:** round-trip VSD→PDF→VSD is the
+identity function (same document id, signatures verify; conformance-tested).
+Export is structurally verified against a real PDF parser (lopdf: page tree,
+StructTreeRoot, fonts); rendering in Acrobat/viewers is visually plausible
+but not yet part of automated CI — a poppler/pdfium golden-render job is
+future work alongside PDF/A.
 
 ---
 
@@ -439,8 +464,8 @@ core spec before a working prototype and an adversarial review.
 | **0.3** ✅ | Streaming + filled forms | Ranged reads with lazy verification; fill/flatten lifecycle (0.2 + 0.3 shipped together as the Phase 1 release) |
 | **0.4** ✅ | `vsd-layout/1.0` | Deterministic layout (minimal profile), `verify --recompute` |
 | **0.5** ✅ | Rendering | Rasterizer + golden layout-hash conformance (0.4 + 0.5 shipped together as the Phase 2 release; `vsd-view` alpha moved to Phase 4a where it belongs) |
-| 0.6 | PDF export | Lossless VSD→PDF (tagged, PDF/A mode) |
-| 0.7 | PDF import | Tagged import + heuristic recovery + `vsd migrate` |
+| **0.6** ✅ | PDF export | Tagged deterministic VSD→PDF with hybrid embedded source (PDF/A mode still open) |
+| **0.7** ✅ | PDF import | Hybrid lossless recovery + pluggable heuristic recovery + Markdown on-ramp + `vsd migrate` (0.6 + 0.7 shipped together as the Phase 3 release; foreign tagged-structure import open) |
 | 0.8 | Web + bindings | WASM viewer, Python/TS authoring |
 | 0.9 | Trust at scale | X.509, timestamps, hybrid PQ, C2PA |
 | **1.0** | Freeze | Spec 1.0, two implementations, audit complete, ISO/W3C track |
@@ -459,9 +484,11 @@ crates keep evolving.
 - **Want the hard problem?** Phase 2f — widening `vsd-layout` to RTL/bidi
   (engine 1.1) while keeping the determinism contract airtight; the 1.0
   contract (docs/LAYOUT-1.0.md) shows the required rigor.
-- **Want adoption?** Phase 3a (PDF export) is mechanical, demoable, and the
-  single most persuasive artifact for skeptics — and the display lists it
-  exports from now exist.
+- **Want adoption?** Phase 3b's open half — walking a foreign tagged PDF's
+  structure tree into a content tree — or richer `StructureRecovery`
+  built-ins (columns, tables); the trait and pipeline already exist. A
+  poppler/pdfium golden-render CI job for exported PDFs is also up for
+  grabs.
 - **Want a moonshot?** §10.2 (`vsd-mcp`) is genuinely small — vsd-core
   already does verified extract/diff; it needs an MCP wrapper and a README
   that explains *why agents should refuse unsigned PDFs*.

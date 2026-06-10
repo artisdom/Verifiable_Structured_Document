@@ -1,0 +1,30 @@
+[package]
+name = "vsd-pdf"
+description = "PDF interop for VSD: lossless tagged-PDF export (with embedded source for verifiable round-trips) and PDF import with structure recovery."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+keywords.workspace = true
+categories.workspace = true
+
+[dependencies]
+vsd-core = { workspace = true, features = ["std"] }
+vsd-container = { workspace = true, features = ["zstd"] }
+vsd-layout = { workspace = true }
+thiserror = { workspace = true, features = ["std"] }
+hex = { workspace = true, features = ["std"] }
+# zlib (FlateDecode) compression for content streams and images
+miniz_oxide = "0.8"
+# PNG decode for image embedding (already in-tree via vsd-render)
+tiny-skia = "0.11"
+# PDF parsing for the import path only
+lopdf = "0.36"
+
+[package.metadata.docs.rs]
+all-features = true
+
+[dev-dependencies]
+vsd-sign = { workspace = true }
