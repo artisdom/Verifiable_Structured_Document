@@ -9,7 +9,10 @@
 //! 4. profile conformance (§10)
 //! 5. store hygiene: orphan objects are reported (a redaction-leak smell)
 
-use std::collections::BTreeSet;
+use alloc::collections::BTreeSet;
+use alloc::format;
+use alloc::string::{String, ToString};
+use alloc::vec::Vec;
 
 use crate::document::Document;
 use crate::error::Result;
@@ -42,7 +45,9 @@ impl Report {
     }
 
     pub fn errors(&self) -> impl Iterator<Item = &Finding> {
-        self.findings.iter().filter(|f| f.severity == Severity::Error)
+        self.findings
+            .iter()
+            .filter(|f| f.severity == Severity::Error)
     }
 
     pub fn warnings(&self) -> impl Iterator<Item = &Finding> {
@@ -161,6 +166,59 @@ fn validate_inner(doc: &Document, r: &mut Report) -> Result<()> {
         }
     }
 
+    // Field layer (spec §6): decode, ids must name fields, computed
+    // dependencies must be acyclic, constraints must hold.
+    if let Some(layer_id) = doc.manifest.field_layer {
+        match doc
+            .store
+            .get_value(&layer_id)
+            .and_then(|v| crate::forms::FilledLayer::from_value(&v))
+        {
+            Err(e) => r.error("E_FIELD_LAYER", format!("field layer: {e}")),
+            Ok(layer) => {
+                if let Ok(fields) = doc.fields() {
+                    let ids: BTreeSet<&str> = fields.iter().map(|f| f.id.as_str()).collect();
+                    for (id, _) in &layer.values {
+                        if !ids.contains(id.as_str()) {
+                            r.error(
+                                "E_FIELD_LAYER_ID",
+                                format!("field layer fills unknown field {id:?}"),
+                            );
+                        }
+                    }
+                    match crate::forms::evaluate_computed(&fields, &layer.env()) {
+                        Err(e) => r.error("E_FIELD_CYCLE", e.to_string()),
+                        Ok(env) => {
+                            // Violations are warnings: a partially filled
+                            // form is a legitimate saved state. Flattening
+                            // (fill::flatten) is the hard gate.
+                            #[cfg(feature = "std")]
+                            for v in crate::forms::check_constraints(&fields, &env) {
+                                r.warn(
+                                    "W_CONSTRAINT",
+                                    format!("field {:?}: {}", v.field, v.message),
+                                );
+                            }
+                            #[cfg(not(feature = "std"))]
+                            {
+                                let _ = env;
+                                r.warn(
+                                    "W_CONSTRAINTS_UNCHECKED",
+                                    "constraints not evaluated (no_std build)",
+                                );
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    } else if let Ok(fields) = doc.fields() {
+        // Even without a layer, computed-field cycles are malformed.
+        if let Err(e) = crate::forms::evaluate_computed(&fields, &Default::default()) {
+            r.error("E_FIELD_CYCLE", e.to_string());
+        }
+    }
+
     // Profile conformance (§10).
     match doc.manifest.profile {
         Profile::Core => {}
@@ -187,11 +245,7 @@ fn validate_inner(doc: &Document, r: &mut Report) -> Result<()> {
 
     // Store hygiene: orphans.
     let closure = doc.closure()?;
-    let orphans: Vec<_> = doc
-        .store
-        .ids()
-        .filter(|id| !closure.contains(id))
-        .collect();
+    let orphans: Vec<_> = doc.store.ids().filter(|id| !closure.contains(id)).collect();
     if !orphans.is_empty() {
         r.warn(
             "W_ORPHANS",
@@ -205,7 +259,10 @@ fn validate_inner(doc: &Document, r: &mut Report) -> Result<()> {
     }
     for id in &closure {
         if !doc.store.contains(id) {
-            r.error("E_MISSING_OBJECT", format!("referenced object {id} is absent"));
+            r.error(
+                "E_MISSING_OBJECT",
+                format!("referenced object {id} is absent"),
+            );
         }
     }
     Ok(())
@@ -254,8 +311,10 @@ impl TreeCtx<'_> {
             }
             Node::Table(t) => {
                 if t.body.is_empty() {
-                    self.report
-                        .error("E_TABLE_EMPTY", format!("table at {path:?}: body must be non-empty"));
+                    self.report.error(
+                        "E_TABLE_EMPTY",
+                        format!("table at {path:?}: body must be non-empty"),
+                    );
                 }
                 let ncols = t.cols.len();
                 for row in t.head.iter().chain(&t.body).chain(&t.foot) {

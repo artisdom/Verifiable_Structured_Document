@@ -1,0 +1,109 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: -D warnings
+
+jobs:
+  test:
+    name: test (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo build --workspace --all-targets
+      - run: cargo test --workspace
+      - name: Conformance vectors are reproducible
+        run: |
+          cargo run -p xtask -- gen-vectors
+          git diff --exit-code testdata/vectors.json
+
+  msrv:
+    name: MSRV (1.85)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.85"
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo check --workspace
+
+  lint:
+    name: fmt + clippy
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo fmt --all --check
+      - run: cargo clippy --workspace --all-targets -- -D warnings
+
+  portability:
+    name: no_std + wasm32
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown, thumbv7em-none-eabihf
+      - uses: Swatinem/rust-cache@v2
+      - name: vsd-core builds without std (embedded verifiers)
+        run: cargo check -p vsd-core --no-default-features --target thumbv7em-none-eabihf
+      - name: vsd-core builds for wasm (browser viewer track)
+        run: cargo check -p vsd-core --target wasm32-unknown-unknown
+
+  docs:
+    name: rustdoc (broken links are errors)
+    runs-on: ubuntu-latest
+    env:
+      RUSTDOCFLAGS: -D warnings
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo doc --workspace --no-deps --all-features
+
+  semver:
+    name: semver-checks
+    runs-on: ubuntu-latest
+    # No published baseline before the first crates.io release; advisory
+    # until then, a hard gate afterwards.
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: obi1kenobi/cargo-semver-checks-action@v2
+        with:
+          package: vsd-core, vsd-container, vsd-sign
+
+  fuzz-smoke:
+    name: fuzz smoke (60s per target)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@nightly
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: fuzz
+      - run: cargo install cargo-fuzz --locked
+      - name: Seed corpus from conformance vectors
+        run: |
+          mkdir -p fuzz/corpus/container_read
+          cp testdata/valid/*.vsd fuzz/corpus/container_read/
+      - name: Smoke-run every fuzz target
+        run: |
+          for target in cbor_decode container_read tree_decode expr_decode; do
+            cargo +nightly fuzz run "$target" -- -max_total_time=60 -rss_limit_mb=4096
+          done

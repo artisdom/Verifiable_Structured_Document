@@ -34,10 +34,10 @@ four properties that matter and removes the failure modes by construction:
 
 | Crate | Contents |
 |---|---|
-| [`vsd-core`](crates/vsd-core) | Deterministic CBOR (RFC 8949 §4.2, strict both ways) · content-addressed object store · content tree · manifest & profiles · validation · destructive redaction · forms · object-set diff · render-layer types |
-| [`vsd-container`](crates/vsd-container) | The `.vsd` chunk container: 32-byte header, BLAKE3-checksummed chunks, object index, signature blocks, trailer; zstd optional |
+| [`vsd-core`](crates/vsd-core) | Deterministic CBOR (RFC 8949 §4.2, strict both ways) · content-addressed object store · content tree · manifest & profiles · validation · destructive redaction · forms + fill/flatten · object-set diff · render-layer types. `no_std + alloc` capable. |
+| [`vsd-container`](crates/vsd-container) | The `.vsd` chunk container: 32-byte header, BLAKE3-checksummed chunks, object index, signature blocks, trailer; zstd optional; lazy `StreamReader` for ranged access |
 | [`vsd-sign`](crates/vsd-sign) | Ed25519 signatures over document/subtree Merkle roots, with domain separation (wire format reserves `ecdsa-p256`, `ml-dsa-65`) |
-| [`vsd-cli`](crates/vsd-cli) | The `vsd` tool: `pack`, `info`, `validate`, `extract`, `objects`, `keygen`, `sign`, `verify`, `redact`, `diff` |
+| [`vsd-cli`](crates/vsd-cli) | The `vsd` tool: `pack`, `info`, `validate`, `extract`, `objects`, `keygen`, `sign`, `verify`, `redact`, `diff`, `fill`, `flatten` |
 
 ## Quick start
 
@@ -130,12 +130,37 @@ See **[ROADMAP.md](ROADMAP.md)** for the full design rationale, phased
 implementation plan, release train, and the long-horizon feature list.
 Summary:
 
-**Implemented (v0.1):** the canonical layer end to end — deterministic
-encoding, content addressing, container I/O with full integrity verification,
-validation with accessibility as a validity condition, Ed25519 signing with
-subtree scopes and amendment chains, spec-defined destructive redaction with
-proofs, the total forms expression language, object-set diffs, text
-extraction, and the CLI.
+**Implemented (v0.1, the canonical layer):** deterministic encoding, content
+addressing, container I/O with full integrity verification, validation with
+accessibility as a validity condition, Ed25519 signing with subtree scopes
+and amendment chains, spec-defined destructive redaction with proofs, the
+total forms expression language, object-set diffs, text extraction, and the
+CLI.
+
+**Implemented (v0.3, Phase 1 — hardening & ecosystem hygiene):**
+
+- **Streaming/ranged reads** (§9): `StreamReader` over any `RangeSource`
+  (file, HTTP range transport) — open verifies header/trailer/manifest,
+  objects load lazily with per-object BLAKE3 verification; `vsd` fetches
+  exactly the objects page *n* needs via the page-index object.
+- **Filled forms**: `vsd fill --set qty=4` layers values over an immutable
+  blank form (shared objects, predecessor chain); `vsd flatten` performs the
+  spec-defined merge, gated on all constraints passing; computed fields
+  evaluate in dependency order with cycles rejected at validation.
+- **`no_std + alloc` vsd-core**, build-verified for bare-metal ARM and wasm32
+  — embedded verifiers (passport readers, access hardware) can check
+  structure and signatures offline.
+- **Public conformance vectors** ([testdata/](testdata/)): valid + invalid
+  files with a machine-readable expectation manifest, deterministically
+  regenerable — a second implementation can test itself without our source.
+- **Fuzz harness** ([fuzz/](fuzz/)): four targets asserting bijection/
+  canonical-fixpoint properties, not just absence of panics.
+- **Property-based tests**: canonical-fixpoint, roundtrip, and
+  redaction-never-leaks over generated documents.
+- **CI matrix**: 3 OSes, MSRV, no_std/wasm targets, fmt/clippy/docs gates,
+  vector reproducibility, fuzz smoke, semver-checks.
+- **Threat model** ([docs/THREAT_MODEL.md](docs/THREAT_MODEL.md)) and
+  [security policy](SECURITY.md).
 
 **Not yet implemented (the honest list, spec §13):**
 
@@ -148,19 +173,20 @@ extraction, and the CLI.
 - PDF interop converters (PDF→VSD structure recovery; VSD→PDF export).
 - X.509 chains, RFC 3161 timestamps, and post-quantum (`ml-dsa-65`) signatures
   — wire format reserves all three.
-- Streaming/ranged readers (the page-index object and chunk ordering are
-  specified and written, the lazy reader is not).
-- A public conformance test-vector suite beyond the current integration tests.
+- crates.io publication (release-ready; awaits the repository going public).
 
 ## Security posture
 
-- No `unsafe` in any VSD crate.
+- No `unsafe` in any VSD crate (`#![forbid(unsafe_code)]`, compiler-enforced).
 - No executable content in the format; forms are a total, terminating
   expression language with RE2-class regexes (linear-time matching).
 - Hostile-input bounds: nesting depth caps, chunk size sanity caps,
   decompression-bomb guard, expression size/depth caps.
 - Strict parsing everywhere — unknown keys, unknown node types, and
   non-canonical encodings are rejected, eliminating polyglot ambiguity.
+- Every parser fuzzed with property assertions; full written threat model in
+  [docs/THREAT_MODEL.md](docs/THREAT_MODEL.md); report vulnerabilities per
+  [SECURITY.md](SECURITY.md).
 
 ## License
 

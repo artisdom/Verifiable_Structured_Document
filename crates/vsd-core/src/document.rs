@@ -2,7 +2,8 @@
 //! that backs it. Container-agnostic — `vsd-container` handles bytes on
 //! disk, this type handles meaning.
 
-use std::collections::BTreeSet;
+use alloc::collections::BTreeSet;
+use alloc::vec::Vec;
 
 use crate::cbor::Value;
 use crate::error::{Error, Result};
@@ -79,6 +80,9 @@ impl Document {
         }
         if let Some(pi) = self.manifest.page_index {
             seen.insert(pi);
+        }
+        if let Some(fl) = self.manifest.field_layer {
+            seen.insert(fl);
         }
         // The predecessor manifest is a *reference to history*, not a
         // contained object; it is not part of this document's closure.
@@ -285,6 +289,7 @@ impl DocumentBuilder {
             metadata,
             provenance,
             page_index: None,
+            field_layer: None,
             profile: self.profile,
             predecessor: self.predecessor,
         };

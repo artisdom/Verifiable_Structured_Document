@@ -36,12 +36,16 @@
 //! | I5 | Cryptography over meaning, not bytes |
 
 #![forbid(unsafe_code)]
+#![cfg_attr(not(feature = "std"), no_std)]
+
+extern crate alloc;
 
 pub mod cbor;
 pub mod diff;
 pub mod document;
 pub mod error;
 pub mod extract;
+pub mod fill;
 pub mod forms;
 pub mod layout;
 pub mod manifest;

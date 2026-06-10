@@ -13,6 +13,12 @@
 //! and the verification hook ship now so caches produced by any engine
 //! are representable and structurally checkable.
 
+use alloc::borrow::ToOwned;
+use alloc::format;
+use alloc::string::String;
+use alloc::vec;
+use alloc::vec::Vec;
+
 use crate::cbor::{MapBuilder, Value};
 use crate::document::Document;
 use crate::error::{Error, Result};

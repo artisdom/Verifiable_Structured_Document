@@ -1,0 +1,48 @@
+[package]
+name = "vsd-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2021"
+
+# cargo-fuzz convention: this crate is its own workspace so the fuzz
+# harness (nightly, libFuzzer) never affects stable builds of the tree.
+[workspace]
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+vsd-core = { path = "../crates/vsd-core" }
+vsd-container = { path = "../crates/vsd-container" }
+
+[[bin]]
+name = "cbor_decode"
+path = "fuzz_targets/cbor_decode.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "container_read"
+path = "fuzz_targets/container_read.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "tree_decode"
+path = "fuzz_targets/tree_decode.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "expr_decode"
+path = "fuzz_targets/expr_decode.rs"
+test = false
+doc = false
+bench = false
+
+[profile.release]
+debug = 1

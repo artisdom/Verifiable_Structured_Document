@@ -5,6 +5,10 @@
 //! the output is the text the document semantically contains, byte for
 //! byte what a screen reader or indexer sees.
 
+use alloc::borrow::ToOwned;
+use alloc::format;
+use alloc::string::String;
+
 use crate::document::Document;
 use crate::error::Result;
 use crate::tree::{Inline, Node};

@@ -85,6 +85,25 @@ enum Command {
     },
     /// Compare two documents as object-set + structural diffs.
     Diff { old: PathBuf, new: PathBuf },
+    /// Fill form fields, producing a new document layered over the base.
+    Fill {
+        file: PathBuf,
+        /// Field assignments, e.g. --set qty=3 --set name="Alice".
+        /// Values are parsed according to the field's kind.
+        #[arg(long = "set", value_name = "ID=VALUE")]
+        sets: Vec<String>,
+        #[arg(short, long)]
+        output: PathBuf,
+        /// Fail (instead of warn) when constraints are violated.
+        #[arg(long)]
+        strict: bool,
+    },
+    /// Replace all fields with their final values (defined merge, §6).
+    Flatten {
+        file: PathBuf,
+        #[arg(short, long)]
+        output: PathBuf,
+    },
 }
 
 fn main() {
@@ -116,12 +135,18 @@ fn run() -> Result<()> {
             output,
         } => redact(&file, &path, reason, &output),
         Command::Diff { old, new } => diff(&old, &new),
+        Command::Fill {
+            file,
+            sets,
+            output,
+            strict,
+        } => fill(&file, &sets, &output, strict),
+        Command::Flatten { file, output } => flatten(&file, &output),
     }
 }
 
 fn load(path: &Path) -> Result<vsd_container::VsdFile> {
-    read_file(path, &ReadOptions::default())
-        .with_context(|| format!("reading {}", path.display()))
+    read_file(path, &ReadOptions::default()).with_context(|| format!("reading {}", path.display()))
 }
 
 fn pack(input: &Path, output: &Path, profile: &str, no_compress: bool) -> Result<()> {
@@ -182,7 +207,11 @@ fn info(file: &Path) -> Result<()> {
     );
     println!(
         "render cache: {}",
-        if doc.manifest.render_cache.is_some() { "present" } else { "none (structure-only)" }
+        if doc.manifest.render_cache.is_some() {
+            "present"
+        } else {
+            "none (structure-only)"
+        }
     );
     if let Some(pred) = doc.manifest.predecessor {
         println!("predecessor : {pred} (amendment chain)");
@@ -282,8 +311,8 @@ fn keygen(output: &Path) -> Result<()> {
 }
 
 fn read_key(path: &Path) -> Result<vsd_sign::SigningKey> {
-    let hex_str = std::fs::read_to_string(path)
-        .with_context(|| format!("reading key {}", path.display()))?;
+    let hex_str =
+        std::fs::read_to_string(path).with_context(|| format!("reading key {}", path.display()))?;
     let seed = hex::decode(hex_str.trim()).context("key file must be hex")?;
     Ok(vsd_sign::SigningKey::from_seed(&seed)?)
 }
@@ -358,17 +387,17 @@ fn redact(file: &Path, path_str: &str, reason: Option<String>, output: &Path) ->
     let vsd = load(file)?;
     let path: Vec<usize> = path_str
         .split('.')
-        .map(|p| p.parse::<usize>().context("path must be dot-separated indices"))
+        .map(|p| {
+            p.parse::<usize>()
+                .context("path must be dot-separated indices")
+        })
         .collect::<Result<Vec<_>>>()?;
     let result = vsd_core::redact::redact(&vsd.document, &path, reason)?;
 
     // Spec §7.2: prior signatures cover the pre-redaction manifest; they
     // belong to the predecessor, not to this revision. Drop them.
     write_file(output, &result.document, &[], &WriteOptions::default())?;
-    println!(
-        "redacted node at path {path_str} → {}",
-        output.display()
-    );
+    println!("redacted node at path {path_str} → {}", output.display());
     println!("removed-subtree proof: {}", hex::encode(result.proof));
     println!(
         "purged {} unreferenced object(s) from the store",
@@ -415,6 +444,73 @@ fn diff(old: &Path, new: &Path) -> Result<()> {
     Ok(())
 }
 
+fn fill(file: &Path, sets: &[String], output: &Path, strict: bool) -> Result<()> {
+    use std::collections::BTreeMap;
+    use vsd_core::forms::FieldValue;
+    use vsd_core::tree::FieldKind;
+
+    let vsd = load(file)?;
+    let fields = vsd.document.fields()?;
+    let kinds: BTreeMap<&str, FieldKind> = fields.iter().map(|f| (f.id.as_str(), f.kind)).collect();
+
+    let mut inputs = BTreeMap::new();
+    for s in sets {
+        let (id, raw) = s
+            .split_once('=')
+            .with_context(|| format!("--set {s:?}: expected ID=VALUE"))?;
+        let kind = kinds
+            .get(id)
+            .with_context(|| format!("no field with id {id:?}"))?;
+        let value = match kind {
+            FieldKind::Number => FieldValue::Num(
+                raw.parse::<f64>()
+                    .with_context(|| format!("field {id:?} is a number, got {raw:?}"))?,
+            ),
+            FieldKind::Checkbox => FieldValue::Bool(
+                raw.parse::<bool>()
+                    .with_context(|| format!("field {id:?} is a checkbox, use true/false"))?,
+            ),
+            _ => FieldValue::Str(raw.to_owned()),
+        };
+        inputs.insert(id.to_owned(), value);
+    }
+
+    let result = vsd_core::fill::fill(&vsd.document, &inputs)?;
+    for v in &result.violations {
+        eprintln!(
+            "[{}] {}: {}",
+            if strict { "ERROR" } else { "warn " },
+            v.field,
+            v.message
+        );
+    }
+    if strict && !result.violations.is_empty() {
+        bail!("constraints violated; not writing output");
+    }
+    write_file(output, &result.document, &[], &WriteOptions::default())?;
+    println!(
+        "filled {} field(s) → {}\nnew document id: {} (predecessor: {})",
+        inputs.len(),
+        output.display(),
+        result.document.document_id()?,
+        vsd.document_id
+    );
+    Ok(())
+}
+
+fn flatten(file: &Path, output: &Path) -> Result<()> {
+    let vsd = load(file)?;
+    let flat = vsd_core::fill::flatten(&vsd.document)?;
+    write_file(output, &flat, &[], &WriteOptions::default())?;
+    println!(
+        "flattened → {}\nnew document id: {} (predecessor: {})",
+        output.display(),
+        flat.document_id()?,
+        vsd.document_id
+    );
+    Ok(())
+}
+
 /// Render a CBOR value as JSON for `extract --format json`.
 /// Byte strings become hex; this is a debug/interop view, not a
 /// canonical representation.
@@ -440,6 +536,8 @@ fn cbor_to_json(v: &vsd_core::cbor::Value) -> serde_json::Value {
         ),
         C::Bool(b) => J::Bool(*b),
         C::Null => J::Null,
-        C::Float(x) => serde_json::Number::from_f64(*x).map(J::Number).unwrap_or(J::Null),
+        C::Float(x) => serde_json::Number::from_f64(*x)
+            .map(J::Number)
+            .unwrap_or(J::Null),
     }
 }

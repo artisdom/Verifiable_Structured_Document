@@ -10,8 +10,21 @@ repository.workspace = true
 keywords.workspace = true
 categories.workspace = true
 
+[features]
+default = ["std"]
+# Without `std` the crate is `no_std + alloc`: everything works except
+# regex-valid form expressions, whose patterns are length-checked but not
+# compiled or evaluated (embedded verifiers typically don't run forms).
+std = ["dep:regex", "blake3/std", "hex/std", "thiserror/std"]
+
 [dependencies]
 blake3 = { workspace = true }
 thiserror = { workspace = true }
-regex = { workspace = true }
+regex = { workspace = true, optional = true }
 hex = { workspace = true }
+
+[dev-dependencies]
+proptest = { workspace = true }
+
+[package.metadata.docs.rs]
+all-features = true

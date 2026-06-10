@@ -38,10 +38,7 @@ pub fn write_document(
     signatures: &[Signature],
     opts: &WriteOptions,
 ) -> Result<Vec<u8>> {
-    let manifest_bytes = doc
-        .manifest
-        .to_value()
-        .encode()?;
+    let manifest_bytes = doc.manifest.to_value().encode()?;
 
     // --- Plan the object store layout ------------------------------------
     // One OBJS chunk; objects concatenated in id order (deterministic

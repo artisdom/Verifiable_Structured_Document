@@ -190,9 +190,10 @@ impl AuthorCtx<'_> {
                     .context("list needs \"items\"")?
                     .iter()
                     .map(|item| match item {
-                        Json::Array(blocks) => {
-                            blocks.iter().map(|b| self.block(b)).collect::<Result<Vec<_>>>()
-                        }
+                        Json::Array(blocks) => blocks
+                            .iter()
+                            .map(|b| self.block(b))
+                            .collect::<Result<Vec<_>>>(),
                         other => Ok(vec![self.block(other)?]),
                     })
                     .collect::<Result<Vec<_>>>()?,
@@ -227,7 +228,9 @@ impl AuthorCtx<'_> {
                     // Expressions are authored in the same s-expression
                     // JSON shape as the wire format.
                     let cbor = json_to_cbor(j)?;
-                    Ok(Some(Expr::from_value(&cbor).map_err(|e| anyhow!("{key}: {e}"))?))
+                    Ok(Some(
+                        Expr::from_value(&cbor).map_err(|e| anyhow!("{key}: {e}"))?,
+                    ))
                 }
             }
         };
@@ -267,7 +270,10 @@ impl AuthorCtx<'_> {
         } else {
             ResourceKind::Image
         };
-        let blob = Blob { mime: mime.clone(), data };
+        let blob = Blob {
+            mime: mime.clone(),
+            data,
+        };
         let data_id = vsd_core::ObjectId::of_value(&blob.to_value())?;
 
         let name = format!("res{}", self.next_res);
@@ -397,7 +403,9 @@ impl AuthorCtx<'_> {
         let key = (
             obj.get("bold").and_then(Json::as_bool).unwrap_or(false),
             obj.get("italic").and_then(Json::as_bool).unwrap_or(false),
-            obj.get("underline").and_then(Json::as_bool).unwrap_or(false),
+            obj.get("underline")
+                .and_then(Json::as_bool)
+                .unwrap_or(false),
             obj.get("mono").and_then(Json::as_bool).unwrap_or(false),
         );
         if key == (false, false, false, false) {

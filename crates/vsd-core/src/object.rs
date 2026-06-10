@@ -4,9 +4,11 @@
 //! render caches, metadata — is an immutable *object*:
 //! `object_id = BLAKE3-256(canonical_encoding(object))`.
 
-use std::collections::BTreeMap;
-use std::fmt;
-use std::str::FromStr;
+use alloc::collections::BTreeMap;
+use alloc::string::String;
+use alloc::vec::Vec;
+use core::fmt;
+use core::str::FromStr;
 
 use crate::cbor::Value;
 use crate::error::{Error, Result};
@@ -106,7 +108,10 @@ impl ObjectStore {
         let id = ObjectId::of_bytes(&bytes);
         if let Some(c) = claimed {
             if c != id {
-                return Err(Error::HashMismatch { claimed: c, actual: id });
+                return Err(Error::HashMismatch {
+                    claimed: c,
+                    actual: id,
+                });
             }
         }
         self.objects.insert(id, bytes);
@@ -151,7 +156,7 @@ impl ObjectStore {
     /// Remove every object whose id is not in `keep`. Returns removed ids.
     /// This is the purge step of redaction (spec §7.2): objects no longer
     /// referenced by any manifest MUST NOT survive in the store.
-    pub fn retain_only(&mut self, keep: &std::collections::BTreeSet<ObjectId>) -> Vec<ObjectId> {
+    pub fn retain_only(&mut self, keep: &alloc::collections::BTreeSet<ObjectId>) -> Vec<ObjectId> {
         let doomed: Vec<ObjectId> = self
             .objects
             .keys()
@@ -181,7 +186,10 @@ mod tests {
             .put("a", Value::text("hello"))
             .put("x", Value::Unsigned(1))
             .build();
-        assert_eq!(ObjectId::of_value(&a).unwrap(), ObjectId::of_value(&b).unwrap());
+        assert_eq!(
+            ObjectId::of_value(&a).unwrap(),
+            ObjectId::of_value(&b).unwrap()
+        );
     }
 
     #[test]

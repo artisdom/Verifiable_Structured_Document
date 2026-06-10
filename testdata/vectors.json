@@ -1,0 +1,77 @@
+{
+  "format": "VSD conformance vectors",
+  "format_version": [
+    0,
+    1
+  ],
+  "generator": "cargo run -p xtask -- gen-vectors",
+  "invalid": [
+    {
+      "file": "invalid/bad-magic.vsd",
+      "reject_reason": "magic bytes corrupted (text-mode transfer)"
+    },
+    {
+      "file": "invalid/truncated.vsd",
+      "reject_reason": "file shorter than the size declared in the header"
+    },
+    {
+      "file": "invalid/corrupt-objs.vsd",
+      "reject_reason": "single flipped bit in the object store (checksum + object hash)"
+    },
+    {
+      "file": "invalid/unknown-critical.vsd",
+      "reject_reason": "unknown chunk type with the critical flag set"
+    },
+    {
+      "file": "invalid/trailer-docid-mismatch.vsd",
+      "reject_reason": "trailer doc-id does not equal BLAKE3(MNFST payload); chunk checksum deliberately fixed up so only the identity check can catch it"
+    },
+    {
+      "file": "invalid/noncanonical-mnfst.vsd",
+      "reject_reason": "MNFST payload carries a trailing byte: not the canonical encoding, so it cannot be the document identity preimage"
+    }
+  ],
+  "rules": {
+    "invalid": "a conforming reader MUST reject the file at read or validation time",
+    "valid": "a conforming reader MUST accept the file, derive exactly doc_id, and report it valid"
+  },
+  "valid": [
+    {
+      "doc_id": "81fd372ab77a19ae22a25d0aca1d1ae124a21f03bd87965663550264e14a4130",
+      "file": "valid/minimal.vsd",
+      "note": "smallest interesting document: heading, paragraph, table, figure",
+      "objects": 4,
+      "profile": "core"
+    },
+    {
+      "doc_id": "81fd372ab77a19ae22a25d0aca1d1ae124a21f03bd87965663550264e14a4130",
+      "file": "valid/minimal-compressed.vsd",
+      "note": "same document id as minimal.vsd: identity survives recompression (spec 2.4)",
+      "objects": 4,
+      "profile": "core"
+    },
+    {
+      "doc_id": "81fd372ab77a19ae22a25d0aca1d1ae124a21f03bd87965663550264e14a4130",
+      "file": "valid/signed.vsd",
+      "note": "one valid ed25519 document-scope signature (deterministic test key)",
+      "profile": "core",
+      "signatures": 1,
+      "signer_pubkey": "197f6b23e16c8532c6abc838facd5ea789be0c76b2920334039bfa8b3d368d61"
+    },
+    {
+      "doc_id": "a5d2134e3b197a7a1bc3ba0cfa91db6a5dc0ca7214a85ab39a049cae8edb2bab",
+      "file": "valid/form-filled.vsd",
+      "note": "field layer with filled values, computed field, and constraints",
+      "profile": "form"
+    },
+    {
+      "doc_id": "52a60076fc838c6b1216cc4ecad6b6c3fa0a72b5807cd59316db2cc093d19533",
+      "file": "valid/redacted.vsd",
+      "must_not_contain": "TOP-SECRET-ACCOUNT-9912",
+      "note": "destructive redaction: the secret exists in no byte of this file (spec 7.2)",
+      "predecessor": "2e5fedd2bc2a59c518b35f63476518afa01e13d4b270ad4af0c03468d5f0c225",
+      "profile": "core",
+      "redaction_proof": "2f276889128c255308132d88ed99a03306565d39f5d40c2d12797c5515f3108c"
+    }
+  ]
+}

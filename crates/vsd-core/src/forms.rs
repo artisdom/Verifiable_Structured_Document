@@ -9,7 +9,13 @@
 //! Wire form (CBOR): literals are themselves; field references are
 //! `{"$": field-id}`; operations are arrays `[op, args...]`.
 
-use std::collections::BTreeMap;
+use alloc::borrow::ToOwned;
+use alloc::boxed::Box;
+use alloc::collections::BTreeMap;
+use alloc::format;
+use alloc::string::{String, ToString};
+use alloc::vec;
+use alloc::vec::Vec;
 
 use crate::cbor::{MapBuilder, Value};
 use crate::error::{Error, Result};
@@ -242,7 +248,11 @@ impl Expr {
                     .iter()
                     .map(|a| Self::from_value_inner(a, depth + 1, nodes))
                     .collect::<Result<Vec<_>>>()?;
-                Ok(if op == "and" { Expr::And(parsed) } else { Expr::Or(parsed) })
+                Ok(if op == "and" {
+                    Expr::And(parsed)
+                } else {
+                    Expr::Or(parsed)
+                })
             }
             "not" => {
                 if args.len() != 1 {
@@ -291,7 +301,7 @@ impl Expr {
                 let pattern = args[1]
                     .as_text()
                     .ok_or_else(|| Error::Expr("regex pattern must be a string".into()))?;
-                compile_anchored(pattern)?; // validate at decode time
+                validate_pattern(pattern)?; // validate at decode time
                 Ok(Expr::RegexValid(field, pattern.to_owned()))
             }
             other => Err(Error::Expr(format!("unknown operation {other:?}"))),
@@ -358,14 +368,7 @@ impl Expr {
             }
             Expr::Round(e) => {
                 let x = e.eval(fields)?.as_num()?;
-                // Round half to even, like IEEE 754 default rounding.
-                let r = x.round();
-                let v = if (x - x.trunc()).abs() == 0.5 && r % 2.0 != 0.0 {
-                    r - (x - x.trunc()).signum()
-                } else {
-                    r
-                };
-                FieldValue::Num(v)
+                FieldValue::Num(round_half_even(x))
             }
             Expr::Cmp(op, a, b) => {
                 let av = a.eval(fields)?;
@@ -419,12 +422,7 @@ impl Expr {
             }
             Expr::Match(field, arms, default) => {
                 let val = fields.get(field).cloned().unwrap_or(FieldValue::Empty);
-                let text = match &val {
-                    FieldValue::Str(s) => s.clone(),
-                    FieldValue::Num(x) => format_num(*x),
-                    FieldValue::Bool(b) => b.to_string(),
-                    FieldValue::Empty => String::new(),
-                };
+                let text = val.to_text();
                 let mut result = None;
                 for (pat, e) in arms {
                     if *pat == text {
@@ -437,20 +435,38 @@ impl Expr {
                     None => default.eval(fields)?,
                 }
             }
+            #[cfg(feature = "std")]
             Expr::RegexValid(field, pattern) => {
                 let re = compile_anchored(pattern)?;
-                let text = match fields.get(field) {
-                    Some(FieldValue::Str(s)) => s.clone(),
-                    Some(FieldValue::Num(x)) => format_num(*x),
-                    _ => String::new(),
-                };
+                let text = fields
+                    .get(field)
+                    .cloned()
+                    .unwrap_or(FieldValue::Empty)
+                    .to_text();
                 FieldValue::Bool(re.is_match(&text))
+            }
+            #[cfg(not(feature = "std"))]
+            Expr::RegexValid(..) => {
+                return Err(Error::Expr(
+                    "regex-valid evaluation requires the std feature".into(),
+                ))
             }
         })
     }
 }
 
 impl FieldValue {
+    /// Final-form text rendering, shared by `match` arms, regex matching,
+    /// and flattening — one definition so they can never disagree.
+    pub fn to_text(&self) -> String {
+        match self {
+            FieldValue::Str(s) => s.clone(),
+            FieldValue::Num(x) => format_num(*x),
+            FieldValue::Bool(b) => b.to_string(),
+            FieldValue::Empty => String::new(),
+        }
+    }
+
     fn as_num(&self) -> Result<f64> {
         match self {
             FieldValue::Num(x) => Ok(*x),
@@ -467,8 +483,45 @@ impl FieldValue {
     }
 }
 
+/// |x| via bit manipulation — identical on every platform, no std needed.
+fn f64_abs(x: f64) -> f64 {
+    f64::from_bits(x.to_bits() & 0x7fff_ffff_ffff_ffff)
+}
+
+/// Round half to even, defined for all doubles, using only casts and
+/// comparisons so the result is bit-identical on every platform and
+/// available in `no_std` builds (part of the determinism posture).
+fn round_half_even(x: f64) -> f64 {
+    const TWO_53: f64 = 9007199254740992.0; // 2^53: at or above, already integral
+    if !x.is_finite() || f64_abs(x) >= TWO_53 {
+        return x;
+    }
+    let t = x as i64; // truncation toward zero is exact below 2^53
+    let tf = t as f64;
+    let frac = x - tf;
+    if frac > 0.5 {
+        tf + 1.0
+    } else if frac < -0.5 {
+        tf - 1.0
+    } else if frac == 0.5 {
+        if t & 1 == 0 {
+            tf
+        } else {
+            tf + 1.0
+        }
+    } else if frac == -0.5 {
+        if t & 1 == 0 {
+            tf
+        } else {
+            tf - 1.0
+        }
+    } else {
+        tf
+    }
+}
+
 fn format_num(x: f64) -> String {
-    if x.fract() == 0.0 && x.abs() < 1e15 {
+    if f64_abs(x) < 1e15 && x == ((x as i64) as f64) {
         format!("{}", x as i64)
     } else {
         format!("{x}")
@@ -492,6 +545,7 @@ fn field_ref(v: &Value) -> Result<String> {
 /// Compile a pattern as fully anchored. The `regex` crate is RE2-class:
 /// guaranteed linear-time matching, no backreferences, no lookaround —
 /// exactly the ReDoS-immune subset the spec requires.
+#[cfg(feature = "std")]
 pub fn compile_anchored(pattern: &str) -> Result<regex::Regex> {
     if pattern.len() > MAX_REGEX_LEN {
         return Err(Error::Expr("regex pattern too long".into()));
@@ -501,6 +555,206 @@ pub fn compile_anchored(pattern: &str) -> Result<regex::Regex> {
         .dfa_size_limit(1 << 20)
         .build()
         .map_err(|e| Error::Expr(format!("invalid regex: {e}")))
+}
+
+/// Decode-time pattern validation. With `std` the pattern is fully
+/// compiled; in `no_std` builds only the length bound is enforced
+/// (embedded *verifiers* check structure and signatures — form
+/// evaluation belongs to full environments).
+fn validate_pattern(pattern: &str) -> Result<()> {
+    if pattern.len() > MAX_REGEX_LEN {
+        return Err(Error::Expr("regex pattern too long".into()));
+    }
+    #[cfg(feature = "std")]
+    compile_anchored(pattern)?;
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Filled layer (spec §6): values over an immutable base form
+// ---------------------------------------------------------------------------
+
+/// Filled form values, stored as a separate object referenced from the
+/// manifest's `field-layer` slot. The blank form and every filled
+/// instance share all structural objects; a filled instance is a new
+/// document whose `predecessor` is the blank (or previously filled) form.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct FilledLayer {
+    pub values: Vec<(String, FieldValue)>,
+}
+
+impl FilledLayer {
+    pub fn to_value(&self) -> Value {
+        let entries = self
+            .values
+            .iter()
+            .map(|(id, v)| {
+                let val = match v {
+                    FieldValue::Num(x) => Value::Float(*x),
+                    FieldValue::Str(s) => Value::text(s),
+                    FieldValue::Bool(b) => Value::Bool(*b),
+                    FieldValue::Empty => Value::Null,
+                };
+                (Value::text(id), val)
+            })
+            .collect();
+        MapBuilder::new()
+            .put("t", Value::text("filled"))
+            .put("values", Value::Map(entries))
+            .build()
+    }
+
+    pub fn from_value(v: &Value) -> Result<FilledLayer> {
+        if v.get("t").and_then(Value::as_text) != Some("filled") {
+            return Err(Error::Schema("not a filled-layer object".into()));
+        }
+        let values = v
+            .get("values")
+            .and_then(Value::as_map)
+            .ok_or_else(|| Error::Schema("filled: values must be a map".into()))?
+            .iter()
+            .map(|(k, val)| {
+                let id = k
+                    .as_text()
+                    .ok_or_else(|| Error::Schema("filled: field id must be text".into()))?;
+                let fv = match val {
+                    Value::Float(x) => FieldValue::Num(*x),
+                    Value::Text(s) => FieldValue::Str(s.clone()),
+                    Value::Bool(b) => FieldValue::Bool(*b),
+                    Value::Null => FieldValue::Empty,
+                    _ => {
+                        return Err(Error::Schema(
+                            "filled: value must be float, text, bool, or null".into(),
+                        ))
+                    }
+                };
+                Ok((id.to_owned(), fv))
+            })
+            .collect::<Result<Vec<_>>>()?;
+        Ok(FilledLayer { values })
+    }
+
+    pub fn env(&self) -> BTreeMap<String, FieldValue> {
+        self.values.iter().cloned().collect()
+    }
+}
+
+/// A constraint or completeness violation found while filling/checking.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Violation {
+    pub field: String,
+    pub message: String,
+}
+
+/// Evaluate all computed fields over the supplied inputs, in dependency
+/// order. Fails on a dependency cycle among computed fields — termination
+/// is a property of the language, and cycles are the one way authors
+/// could try to smuggle one in.
+pub fn evaluate_computed(
+    fields: &[crate::tree::Field],
+    inputs: &BTreeMap<String, FieldValue>,
+) -> Result<BTreeMap<String, FieldValue>> {
+    let mut env = inputs.clone();
+    let computed: Vec<&crate::tree::Field> =
+        fields.iter().filter(|f| f.computed.is_some()).collect();
+
+    // Kahn's algorithm over computed→computed dependencies.
+    let ids: BTreeMap<&str, usize> = computed
+        .iter()
+        .enumerate()
+        .map(|(i, f)| (f.id.as_str(), i))
+        .collect();
+    let mut deps: Vec<Vec<usize>> = Vec::new(); // deps[i] = computed indices i reads
+    let mut rdeps: Vec<Vec<usize>> = alloc::vec![Vec::new(); computed.len()];
+    for f in &computed {
+        let mut refs = Vec::new();
+        f.computed.as_ref().expect("filtered").field_refs(&mut refs);
+        let d: Vec<usize> = refs
+            .iter()
+            .filter_map(|r| ids.get(r.as_str()).copied())
+            .collect();
+        deps.push(d);
+    }
+    for (i, d) in deps.iter().enumerate() {
+        for &j in d {
+            rdeps[j].push(i);
+        }
+    }
+    let mut pending: Vec<usize> = deps.iter().map(Vec::len).collect();
+    let mut queue: Vec<usize> = pending
+        .iter()
+        .enumerate()
+        .filter(|(_, &n)| n == 0)
+        .map(|(i, _)| i)
+        .collect();
+    let mut order = Vec::with_capacity(computed.len());
+    while let Some(i) = queue.pop() {
+        order.push(i);
+        for &j in &rdeps[i] {
+            pending[j] -= 1;
+            if pending[j] == 0 {
+                queue.push(j);
+            }
+        }
+    }
+    if order.len() != computed.len() {
+        let stuck: Vec<&str> = pending
+            .iter()
+            .enumerate()
+            .filter(|(_, &n)| n > 0)
+            .map(|(i, _)| computed[i].id.as_str())
+            .collect();
+        return Err(Error::Expr(format!(
+            "computed-field dependency cycle involving {stuck:?}"
+        )));
+    }
+    for i in order {
+        let f = computed[i];
+        let value = f.computed.as_ref().expect("filtered").eval(&env)?;
+        env.insert(f.id.clone(), value);
+    }
+    Ok(env)
+}
+
+/// Check required-ness and constraints of every field against an
+/// evaluated environment. Constraint expressions must yield booleans.
+pub fn check_constraints(
+    fields: &[crate::tree::Field],
+    env: &BTreeMap<String, FieldValue>,
+) -> Vec<Violation> {
+    let mut out = Vec::new();
+    for f in fields {
+        let value = env.get(&f.id).cloned().unwrap_or(FieldValue::Empty);
+        if f.required && value == FieldValue::Empty && f.computed.is_none() {
+            out.push(Violation {
+                field: f.id.clone(),
+                message: "required field is empty".into(),
+            });
+            continue;
+        }
+        if let Some(c) = &f.constraint {
+            // An unfilled optional field is not constraint-checked.
+            if value == FieldValue::Empty {
+                continue;
+            }
+            match c.eval(env) {
+                Ok(FieldValue::Bool(true)) => {}
+                Ok(FieldValue::Bool(false)) => out.push(Violation {
+                    field: f.id.clone(),
+                    message: "constraint violated".into(),
+                }),
+                Ok(_) => out.push(Violation {
+                    field: f.id.clone(),
+                    message: "constraint did not evaluate to a boolean".into(),
+                }),
+                Err(e) => out.push(Violation {
+                    field: f.id.clone(),
+                    message: format!("constraint evaluation failed: {e}"),
+                }),
+            }
+        }
+    }
+    out
 }
 
 #[cfg(test)]

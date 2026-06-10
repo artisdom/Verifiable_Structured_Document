@@ -4,7 +4,12 @@
 //! ids, comparing two revisions is set arithmetic on object ids, plus a
 //! structural walk to name *where* the trees diverge.
 
-use std::collections::BTreeSet;
+use alloc::borrow::ToOwned;
+use alloc::collections::BTreeSet;
+use alloc::format;
+use alloc::string::{String, ToString};
+use alloc::vec;
+use alloc::vec::Vec;
 
 use crate::document::Document;
 use crate::error::Result;
@@ -53,7 +58,14 @@ pub fn diff(old: &Document, new: &Document) -> Result<Diff> {
     let old_root = old.root_node()?;
     let new_root = new.root_node()?;
     let mut path = Vec::new();
-    walk_diff(&old_root, &new_root, old, new, &mut path, &mut d.changed_paths)?;
+    walk_diff(
+        &old_root,
+        &new_root,
+        old,
+        new,
+        &mut path,
+        &mut d.changed_paths,
+    )?;
     Ok(d)
 }
 
@@ -154,8 +166,5 @@ pub fn amendment_chain(doc: &Document) -> Result<Vec<(ObjectId, Option<ObjectId>
 
 /// Convenience: ids shared between two stores (dedup measurement).
 pub fn shared_objects(a: &Document, b: &Document) -> Result<BTreeSet<ObjectId>> {
-    Ok(a.closure()?
-        .intersection(&b.closure()?)
-        .copied()
-        .collect())
+    Ok(a.closure()?.intersection(&b.closure()?).copied().collect())
 }

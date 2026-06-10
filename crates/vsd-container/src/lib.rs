@@ -19,12 +19,14 @@ mod chunk;
 mod error;
 mod reader;
 mod sig;
+mod stream;
 mod writer;
 
 pub use chunk::{ChunkFlags, ChunkType, CHUNK_OVERHEAD};
 pub use error::{ContainerError, Result};
 pub use reader::{read_document, read_file, ReadOptions, VsdFile};
 pub use sig::{SigAlg, SigScope, Signature};
+pub use stream::{RangeSource, StreamReader};
 pub use writer::{write_document, write_file, WriteOptions};
 
 /// PNG-style magic: catches FTP/text-mode corruption (spec §2.1).

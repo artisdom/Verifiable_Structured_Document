@@ -15,7 +15,10 @@ default = ["zstd"]
 zstd = ["dep:zstd"]
 
 [dependencies]
-vsd-core = { workspace = true }
+vsd-core = { workspace = true, features = ["std"] }
 blake3 = { workspace = true }
 thiserror = { workspace = true }
 zstd = { workspace = true, optional = true }
+
+[package.metadata.docs.rs]
+all-features = true

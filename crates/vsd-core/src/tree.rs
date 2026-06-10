@@ -9,6 +9,12 @@
 //! Decoding is strict: unknown keys and missing required keys are errors
 //! in this major version.
 
+use alloc::borrow::ToOwned;
+use alloc::format;
+use alloc::string::String;
+use alloc::vec;
+use alloc::vec::Vec;
+
 use crate::cbor::{MapBuilder, Value};
 use crate::error::{Error, Result};
 use crate::object::ObjectId;
@@ -340,7 +346,11 @@ impl Node {
                 .put("alt", Value::text(&fig.alt))
                 .put_opt(
                     "decorative",
-                    if fig.decorative { Some(Value::Bool(true)) } else { None },
+                    if fig.decorative {
+                        Some(Value::Bool(true))
+                    } else {
+                        None
+                    },
                 )
                 .put("caption", inlines_to_value(&fig.caption)?)
                 .build(),
@@ -488,7 +498,15 @@ impl Node {
             "field" => {
                 check_keys(
                     v,
-                    &["t", "id", "kind", "label", "required", "constraint", "computed"],
+                    &[
+                        "t",
+                        "id",
+                        "kind",
+                        "label",
+                        "required",
+                        "constraint",
+                        "computed",
+                    ],
                     "field",
                 )?;
                 Ok(Node::Field(Field {
@@ -532,7 +550,9 @@ impl Node {
             }
             "ref" => {
                 check_keys(v, &["t", "ref"], "ref")?;
-                Ok(Node::SubtreeRef(ObjectId::from_value(req(v, "ref", "ref")?)?))
+                Ok(Node::SubtreeRef(ObjectId::from_value(req(
+                    v, "ref", "ref",
+                )?)?))
             }
             other => Err(Error::Schema(format!("unknown node type {other:?}"))),
         }
@@ -590,10 +610,9 @@ fn rows_from_value(v: &Value) -> Result<Vec<Row>> {
                     let span = match c.get("span") {
                         None => None,
                         Some(s) => {
-                            let a = s
-                                .as_array()
-                                .filter(|a| a.len() == 2)
-                                .ok_or_else(|| Error::Schema("cell: span must be [rows, cols]".into()))?;
+                            let a = s.as_array().filter(|a| a.len() == 2).ok_or_else(|| {
+                                Error::Schema("cell: span must be [rows, cols]".into())
+                            })?;
                             let rs = a[0]
                                 .as_u64()
                                 .filter(|&n| n >= 1 && n <= u32::MAX as u64)

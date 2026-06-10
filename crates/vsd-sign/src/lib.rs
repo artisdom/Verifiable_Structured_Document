@@ -16,9 +16,9 @@
 use ed25519_dalek::{Signer, Verifier};
 use thiserror::Error;
 
+use vsd_container::{SigAlg, SigScope, Signature};
 use vsd_core::object::ObjectId;
 use vsd_core::Document;
-use vsd_container::{SigAlg, SigScope, Signature};
 
 /// Domain-separation prefix: a VSD signature can never be confused with
 /// a signature over the same 32 bytes in another protocol.

@@ -124,8 +124,7 @@ pub fn read_document(buf: &[u8], opts: &ReadOptions) -> Result<VsdFile> {
     }
 
     // --- Manifest & document id --------------------------------------------
-    let manifest_value =
-        vsd_core::cbor::Value::decode(&mnfst.payload)?;
+    let manifest_value = vsd_core::cbor::Value::decode(&mnfst.payload)?;
     // Canonical-form check: MNFST bytes must be the unique encoding,
     // because the document id is their hash.
     let reencoded = manifest_value.encode()?;
@@ -138,8 +137,7 @@ pub fn read_document(buf: &[u8], opts: &ReadOptions) -> Result<VsdFile> {
     let document_id = ObjectId::of_bytes(&mnfst.payload);
 
     // Trailer cross-checks.
-    let trailer_value =
-        vsd_core::cbor::Value::decode(&trailer.payload)?;
+    let trailer_value = vsd_core::cbor::Value::decode(&trailer.payload)?;
     if let Some(claimed) = trailer_value.get("doc-id").and_then(|v| v.as_bytes()) {
         if claimed != document_id.as_slice() {
             return Err(ContainerError::Structure(
@@ -150,8 +148,7 @@ pub fn read_document(buf: &[u8], opts: &ReadOptions) -> Result<VsdFile> {
 
     // --- Object store: load every indexed object, verifying hashes ---------
     let placements = parse_index(&index.payload)?;
-    let objs_by_offset: BTreeMap<u64, &Chunk> =
-        objs.iter().map(|(off, c)| (*off, c)).collect();
+    let objs_by_offset: BTreeMap<u64, &Chunk> = objs.iter().map(|(off, c)| (*off, c)).collect();
     let mut store = ObjectStore::new();
     for (id, (chunk_off, intra, len, codec)) in &placements {
         if *codec != 0 {

@@ -71,7 +71,11 @@ fn sample_document() -> Document {
         )],
         styles: vec![],
     };
-    builder.resources(resources).profile(Profile::Core).build().unwrap()
+    builder
+        .resources(resources)
+        .profile(Profile::Core)
+        .build()
+        .unwrap()
 }
 
 #[test]
@@ -220,7 +224,9 @@ fn redaction_destroys_content() {
 #[test]
 fn diff_is_object_set_arithmetic() {
     let doc = sample_document();
-    let redacted = vsd_core::redact::redact(&doc, &[1, 1], None).unwrap().document;
+    let redacted = vsd_core::redact::redact(&doc, &[1, 1], None)
+        .unwrap()
+        .document;
 
     let d = vsd_core::diff::diff(&doc, &redacted).unwrap();
     assert!(!d.same_document);
@@ -270,9 +276,7 @@ fn alt_text_is_a_validity_condition() {
 
     let report = vsd_core::validate::validate(&doc);
     assert!(
-        report
-            .errors()
-            .any(|f| f.code == "E_ALT_TEXT"),
+        report.errors().any(|f| f.code == "E_ALT_TEXT"),
         "missing alt text must be a validation error, findings: {:?}",
         report.findings
     );
@@ -358,6 +362,156 @@ fn forms_profile_and_evaluation() {
 }
 
 #[test]
+fn fill_and_flatten_lifecycle() {
+    use std::collections::BTreeMap;
+    use vsd_core::forms::{ArithOp, CmpOp, Expr, FieldValue};
+    use vsd_core::tree::{Field, FieldKind};
+
+    let root = Node::Doc(Doc {
+        lang: "en".into(),
+        dir: Direction::Ltr,
+        children: vec![
+            Node::Para(Para {
+                children: vec![Inline::Text("Order form".into())],
+            }),
+            Node::Field(Field {
+                id: "qty".into(),
+                kind: FieldKind::Number,
+                label: None,
+                required: true,
+                constraint: Some(Expr::Cmp(
+                    CmpOp::Ge,
+                    Box::new(Expr::FieldRef("qty".into())),
+                    Box::new(Expr::Num(1.0)),
+                )),
+                computed: None,
+            }),
+            Node::Field(Field {
+                id: "total".into(),
+                kind: FieldKind::Number,
+                label: None,
+                required: false,
+                constraint: None,
+                computed: Some(Expr::Arith(
+                    ArithOp::Mul,
+                    vec![Expr::FieldRef("qty".into()), Expr::Num(9.5)],
+                )),
+            }),
+        ],
+    });
+    let blank = DocumentBuilder::new(root)
+        .profile(Profile::Form)
+        .build()
+        .unwrap();
+
+    // Flattening an unfilled form with a required field must fail.
+    assert!(vsd_core::fill::flatten(&blank).is_err());
+
+    // Fill with a violating value: saved, but flagged.
+    let mut bad = BTreeMap::new();
+    bad.insert("qty".to_string(), FieldValue::Num(0.0));
+    let r = vsd_core::fill::fill(&blank, &bad).unwrap();
+    assert_eq!(r.violations.len(), 1);
+
+    // Fill correctly; layer rides the container; validation passes.
+    let mut good = BTreeMap::new();
+    good.insert("qty".to_string(), FieldValue::Num(4.0));
+    let filled = vsd_core::fill::fill(&blank, &good).unwrap();
+    assert!(filled.violations.is_empty());
+    let filled = filled.document;
+    assert_eq!(
+        filled.manifest.predecessor,
+        Some(blank.document_id().unwrap())
+    );
+    let bytes = write_document(&filled, &[], &WriteOptions::default()).unwrap();
+    let back = read_document(&bytes, &ReadOptions::default()).unwrap();
+    assert!(vsd_core::validate::validate(&back.document).is_valid());
+
+    // Flatten: fields become final values, computed fields included.
+    let flat = vsd_core::fill::flatten(&back.document).unwrap();
+    assert!(flat.manifest.field_layer.is_none());
+    assert!(flat.fields().unwrap().is_empty());
+    let text = vsd_core::extract::extract_text(&flat).unwrap();
+    assert!(text.contains('4'), "filled value missing: {text}");
+    assert!(text.contains("38"), "computed total missing: {text}");
+    assert!(vsd_core::validate::validate(&flat).is_valid());
+}
+
+#[test]
+fn computed_cycle_is_rejected() {
+    use vsd_core::forms::{ArithOp, Expr};
+    use vsd_core::tree::{Field, FieldKind};
+
+    let mk = |id: &str, dep: &str| {
+        Node::Field(Field {
+            id: id.into(),
+            kind: FieldKind::Number,
+            label: None,
+            required: false,
+            constraint: None,
+            computed: Some(Expr::Arith(
+                ArithOp::Add,
+                vec![Expr::FieldRef(dep.into()), Expr::Num(1.0)],
+            )),
+        })
+    };
+    let doc = DocumentBuilder::new(Node::Doc(Doc {
+        lang: "en".into(),
+        dir: Direction::Ltr,
+        children: vec![mk("a", "b"), mk("b", "a")],
+    }))
+    .profile(Profile::Form)
+    .build()
+    .unwrap();
+    let report = vsd_core::validate::validate(&doc);
+    assert!(report.errors().any(|f| f.code == "E_FIELD_CYCLE"));
+}
+
+#[test]
+fn stream_reader_lazy_access() {
+    use std::io::Cursor;
+    use vsd_container::StreamReader;
+
+    let doc = sample_document();
+    for compress in [false, true] {
+        let bytes = write_document(&doc, &[], &WriteOptions { compress }).unwrap();
+        let mut reader = StreamReader::open(Cursor::new(bytes)).unwrap();
+        assert_eq!(reader.document_id(), doc.document_id().unwrap());
+        assert_eq!(reader.object_count(), doc.store.len());
+
+        // Lazily fetch and verify the root object.
+        let root_id = reader.manifest().root;
+        let root = reader.object(&root_id).unwrap();
+        let node = Node::from_value(&root).unwrap();
+        assert!(matches!(node, Node::Doc(_)));
+    }
+}
+
+#[test]
+fn stream_reader_rejects_substituted_object() {
+    use std::io::Cursor;
+    use vsd_container::StreamReader;
+
+    let doc = sample_document();
+    let bytes = write_document(&doc, &[], &WriteOptions { compress: false }).unwrap();
+
+    // Flip a byte inside the OBJS region (find the fee text).
+    let needle = b"$400 per month";
+    let pos = bytes
+        .windows(needle.len())
+        .position(|w| w == needle)
+        .unwrap();
+    let mut tampered = bytes.clone();
+    tampered[pos] ^= 0x01;
+
+    // Opening succeeds (header/trailer/index untouched)…
+    let mut reader = StreamReader::open(Cursor::new(tampered)).unwrap();
+    let root_id = reader.manifest().root;
+    // …but fetching the tampered object fails hash verification.
+    assert!(reader.object(&root_id).is_err());
+}
+
+#[test]
 fn subtree_signature_scope() {
     let doc = sample_document();
     let key = vsd_sign::SigningKey::generate();
@@ -371,7 +525,9 @@ fn subtree_signature_scope() {
 
     // After redaction the root object changes; the old subtree signature
     // no longer matches an object in the new document.
-    let redacted = vsd_core::redact::redact(&doc, &[1, 1], None).unwrap().document;
+    let redacted = vsd_core::redact::redact(&doc, &[1, 1], None)
+        .unwrap()
+        .document;
     assert_eq!(
         vsd_sign::verify(&redacted, &subtree_sig).unwrap(),
         vsd_sign::Verdict::ValidForOtherTarget

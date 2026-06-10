@@ -1,5 +1,11 @@
 //! Manifest and root-level objects (spec §2.4, §4, §5, §8).
 
+use alloc::borrow::ToOwned;
+use alloc::format;
+use alloc::string::String;
+use alloc::vec;
+use alloc::vec::Vec;
+
 use crate::cbor::{MapBuilder, Value};
 use crate::error::{Error, Result};
 use crate::object::ObjectId;
@@ -54,6 +60,10 @@ pub struct Manifest {
     pub provenance: Option<ObjectId>,
     /// Streaming page index (spec §9).
     pub page_index: Option<ObjectId>,
+    /// Filled form values (spec §6): a separate object layer over the
+    /// immutable blank form. The blank form and every filled instance
+    /// share all structural objects.
+    pub field_layer: Option<ObjectId>,
     pub profile: Profile,
     /// Previous manifest in an authenticated amendment chain (spec §7.1).
     pub predecessor: Option<ObjectId>,
@@ -75,6 +85,7 @@ impl Manifest {
             .put("metadata", self.metadata.to_value())
             .put_opt("provenance", self.provenance.map(ObjectId::to_value))
             .put_opt("page-index", self.page_index.map(ObjectId::to_value))
+            .put_opt("field-layer", self.field_layer.map(ObjectId::to_value))
             .put("profile", Value::text(self.profile.as_str()))
             .put_opt("predecessor", self.predecessor.map(ObjectId::to_value))
             .build()
@@ -89,10 +100,14 @@ impl Manifest {
             "metadata",
             "provenance",
             "page-index",
+            "field-layer",
             "profile",
             "predecessor",
         ];
-        for (k, _) in v.as_map().ok_or_else(|| Error::Schema("manifest must be a map".into()))? {
+        for (k, _) in v
+            .as_map()
+            .ok_or_else(|| Error::Schema("manifest must be a map".into()))?
+        {
             let key = k
                 .as_text()
                 .ok_or_else(|| Error::Schema("manifest: non-text key".into()))?;
@@ -134,6 +149,7 @@ impl Manifest {
             metadata: req_ref("metadata")?,
             provenance: opt_ref("provenance")?,
             page_index: opt_ref("page-index")?,
+            field_layer: opt_ref("field-layer")?,
             profile: Profile::parse(
                 v.get("profile")
                     .and_then(Value::as_text)
@@ -320,10 +336,38 @@ impl ResourceTable {
                 .iter()
                 .map(|s| {
                     MapBuilder::new()
-                        .put_opt("b", if s.bold { Some(Value::Bool(true)) } else { None })
-                        .put_opt("i", if s.italic { Some(Value::Bool(true)) } else { None })
-                        .put_opt("u", if s.underline { Some(Value::Bool(true)) } else { None })
-                        .put_opt("mono", if s.mono { Some(Value::Bool(true)) } else { None })
+                        .put_opt(
+                            "b",
+                            if s.bold {
+                                Some(Value::Bool(true))
+                            } else {
+                                None
+                            },
+                        )
+                        .put_opt(
+                            "i",
+                            if s.italic {
+                                Some(Value::Bool(true))
+                            } else {
+                                None
+                            },
+                        )
+                        .put_opt(
+                            "u",
+                            if s.underline {
+                                Some(Value::Bool(true))
+                            } else {
+                                None
+                            },
+                        )
+                        .put_opt(
+                            "mono",
+                            if s.mono {
+                                Some(Value::Bool(true))
+                            } else {
+                                None
+                            },
+                        )
                         .build()
                 })
                 .collect(),
@@ -471,7 +515,9 @@ impl RenderCache {
             .get("geometry")
             .ok_or_else(|| Error::Schema("render-cache: missing geometry".into()))?;
         if geometry.get("unit").and_then(Value::as_text) != Some("mm") {
-            return Err(Error::Schema("render-cache: geometry unit must be \"mm\"".into()));
+            return Err(Error::Schema(
+                "render-cache: geometry unit must be \"mm\"".into(),
+            ));
         }
         let pages = v
             .get("pages")
@@ -507,6 +553,55 @@ impl RenderCache {
             pages,
             layout_hash,
         })
+    }
+}
+
+/// Streaming page index (spec §9): `page number → required object-id
+/// closure`, so a ranged-HTTP client can fetch exactly the objects for
+/// page 47 of a 900-page manual. Produced alongside a render cache;
+/// VSD/Stream requires it.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct PageIndex {
+    /// `pages[n]` lists every object needed to render page `n`.
+    pub pages: Vec<Vec<ObjectId>>,
+}
+
+impl PageIndex {
+    pub fn to_value(&self) -> Value {
+        MapBuilder::new()
+            .put("t", Value::text("page-index"))
+            .put(
+                "pages",
+                Value::Array(
+                    self.pages
+                        .iter()
+                        .map(|ids| {
+                            Value::Array(ids.iter().copied().map(ObjectId::to_value).collect())
+                        })
+                        .collect(),
+                ),
+            )
+            .build()
+    }
+
+    pub fn from_value(v: &Value) -> Result<PageIndex> {
+        if v.get("t").and_then(Value::as_text) != Some("page-index") {
+            return Err(Error::Schema("not a page-index object".into()));
+        }
+        let pages = v
+            .get("pages")
+            .and_then(Value::as_array)
+            .ok_or_else(|| Error::Schema("page-index: pages must be an array".into()))?
+            .iter()
+            .map(|p| {
+                p.as_array()
+                    .ok_or_else(|| Error::Schema("page-index: page entry must be an array".into()))?
+                    .iter()
+                    .map(ObjectId::from_value)
+                    .collect::<Result<Vec<_>>>()
+            })
+            .collect::<Result<Vec<_>>>()?;
+        Ok(PageIndex { pages })
     }
 }
 
@@ -578,10 +673,10 @@ impl Provenance {
                         ))
                     })
                     .collect::<Result<Vec<_>>>()?;
-                let manifest_hash = ObjectId::from_value(
-                    a.get("manifest-hash")
-                        .ok_or_else(|| Error::Schema("assertion: missing manifest-hash".into()))?,
-                )?;
+                let manifest_hash =
+                    ObjectId::from_value(a.get("manifest-hash").ok_or_else(|| {
+                        Error::Schema("assertion: missing manifest-hash".into())
+                    })?)?;
                 Ok(Assertion {
                     kind,
                     claims,

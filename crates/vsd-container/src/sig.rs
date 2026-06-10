@@ -117,10 +117,9 @@ impl Signature {
         let opt_bytes = |key: &str| -> Result<Option<Vec<u8>>> {
             match v.get(key) {
                 None => Ok(None),
-                Some(x) => x
-                    .as_bytes()
-                    .map(|b| Some(b.to_vec()))
-                    .ok_or_else(|| CoreError::Schema(format!("signature: {key:?} must be bytes")).into()),
+                Some(x) => x.as_bytes().map(|b| Some(b.to_vec())).ok_or_else(|| {
+                    CoreError::Schema(format!("signature: {key:?} must be bytes")).into()
+                }),
             }
         };
         Ok(Signature {

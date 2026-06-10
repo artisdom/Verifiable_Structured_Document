@@ -60,13 +60,42 @@ pub struct Chunk {
     pub payload: Vec<u8>,
 }
 
+/// Streaming zstd decode with a hard read limit: a hostile frame cannot
+/// force a giant allocation (decompression-bomb guard).
+#[cfg(feature = "zstd")]
+pub(crate) fn decompress_payload(stored: &[u8]) -> Result<Vec<u8>> {
+    use std::io::Read;
+    let decoder = zstd::Decoder::new(stored).map_err(|e| ContainerError::Zstd(e.to_string()))?;
+    let mut out = Vec::new();
+    decoder
+        .take(MAX_CHUNK_LEN + 1)
+        .read_to_end(&mut out)
+        .map_err(|e| ContainerError::Zstd(e.to_string()))?;
+    if out.len() as u64 > MAX_CHUNK_LEN {
+        return Err(ContainerError::Structure(
+            "decompressed chunk exceeds sanity cap".into(),
+        ));
+    }
+    Ok(out)
+}
+
+#[cfg(not(feature = "zstd"))]
+pub(crate) fn decompress_payload(_stored: &[u8]) -> Result<Vec<u8>> {
+    Err(ContainerError::ZstdUnavailable)
+}
+
 pub fn checksum(payload: &[u8]) -> u64 {
     let hash = blake3::hash(payload);
     u64::from_le_bytes(hash.as_bytes()[..8].try_into().unwrap())
 }
 
 /// Serialize a chunk, compressing if requested (and beneficial).
-pub fn encode_chunk(ctype: ChunkType, mut flags: ChunkFlags, payload: &[u8], compress: bool) -> Result<Vec<u8>> {
+pub fn encode_chunk(
+    ctype: ChunkType,
+    mut flags: ChunkFlags,
+    payload: &[u8],
+    compress: bool,
+) -> Result<Vec<u8>> {
     let stored: Vec<u8>;
     #[cfg(feature = "zstd")]
     {
@@ -132,29 +161,7 @@ pub fn decode_chunk(buf: &[u8], offset: u64) -> Result<(Chunk, u64)> {
     }
 
     let payload = if flags.compressed() {
-        #[cfg(feature = "zstd")]
-        {
-            // Streaming decode with a hard read limit: a hostile frame
-            // cannot force a giant allocation (decompression bomb guard).
-            use std::io::Read;
-            let decoder = zstd::Decoder::new(stored)
-                .map_err(|e| ContainerError::Zstd(e.to_string()))?;
-            let mut out = Vec::new();
-            decoder
-                .take(MAX_CHUNK_LEN + 1)
-                .read_to_end(&mut out)
-                .map_err(|e| ContainerError::Zstd(e.to_string()))?;
-            if out.len() as u64 > MAX_CHUNK_LEN {
-                return Err(ContainerError::Structure(
-                    "decompressed chunk exceeds sanity cap".into(),
-                ));
-            }
-            out
-        }
-        #[cfg(not(feature = "zstd"))]
-        {
-            return Err(ContainerError::ZstdUnavailable);
-        }
+        decompress_payload(stored)?
     } else {
         stored.to_vec()
     };

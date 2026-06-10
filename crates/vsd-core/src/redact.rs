@@ -13,6 +13,10 @@
 //!
 //! Drawing a black box over text is not representable in this format.
 
+use alloc::string::String;
+use alloc::vec;
+use alloc::vec::Vec;
+
 use crate::document::Document;
 use crate::error::{Error, Result};
 use crate::manifest::Manifest;
@@ -53,6 +57,9 @@ pub fn redact(doc: &Document, path: &[usize], reason: Option<String>) -> Result<
         root: new_root,
         render_cache: None,
         page_index: None, // derived from the cache; dropped with it
+        // Filled values may quote the redacted content; they do not
+        // survive a redaction. Re-fill from the redacted base if needed.
+        field_layer: None,
         predecessor: Some(doc.manifest.document_id()?),
         ..doc.manifest.clone()
     };
@@ -108,7 +115,7 @@ fn replace_at(
             if last {
                 let removed = Node::Section(crate::tree::Section {
                     role: "list-item".into(),
-                    children: std::mem::take(item),
+                    children: core::mem::take(item),
                 });
                 let proof = *blake3::hash(&removed.to_value()?.encode()?).as_bytes();
                 *item = vec![Node::Redacted(Redacted {
@@ -136,7 +143,7 @@ fn replace_at(
             if last {
                 let removed = Node::Section(crate::tree::Section {
                     role: "table-cell".into(),
-                    children: std::mem::take(&mut cell.children),
+                    children: core::mem::take(&mut cell.children),
                 });
                 let proof = *blake3::hash(&removed.to_value()?.encode()?).as_bytes();
                 cell.children = vec![Node::Redacted(Redacted {
@@ -154,7 +161,7 @@ fn replace_at(
         let target = children
             .get_mut(idx)
             .ok_or_else(|| Error::BadNodePath(full.to_vec()))?;
-        let removed = std::mem::replace(
+        let removed = core::mem::replace(
             target,
             Node::Redacted(Redacted {
                 reason: reason.clone(),
@@ -186,7 +193,7 @@ fn descend_blocks(
         .get_mut(idx)
         .ok_or_else(|| Error::BadNodePath(full.to_vec()))?;
     if rel.len() == 1 {
-        let removed = std::mem::replace(
+        let removed = core::mem::replace(
             target,
             Node::Redacted(Redacted {
                 reason: reason.clone(),

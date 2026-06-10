@@ -14,7 +14,11 @@
 //! Strict decoding is a security property: a `.vsd` cannot be a polyglot,
 //! and two conforming parsers cannot disagree about what a document says.
 
-use std::fmt;
+use alloc::borrow::ToOwned;
+use alloc::format;
+use alloc::string::String;
+use alloc::vec::Vec;
+use core::fmt;
 
 use crate::error::{Error, Result};
 
@@ -54,7 +58,10 @@ impl fmt::Debug for Value {
             Value::Bytes(b) => write!(f, "h'{}'", hex::encode(b)),
             Value::Text(s) => write!(f, "{s:?}"),
             Value::Array(a) => f.debug_list().entries(a).finish(),
-            Value::Map(m) => f.debug_map().entries(m.iter().map(|(k, v)| (k, v))).finish(),
+            Value::Map(m) => f
+                .debug_map()
+                .entries(m.iter().map(|(k, v)| (k, v)))
+                .finish(),
             Value::Bool(b) => write!(f, "{b}"),
             Value::Null => write!(f, "null"),
             Value::Float(x) => write!(f, "{x}"),
@@ -290,21 +297,28 @@ fn f32_to_f16_exact(x: f32) -> Option<u16> {
     None
 }
 
+/// Exact binary16 → binary64 conversion via bit manipulation: every f16
+/// value is exactly representable in f64, and using integer ops keeps the
+/// conversion identical on every platform and free of `std` float math.
 fn f16_to_f64(h: u16) -> f64 {
-    let sign = if h & 0x8000 != 0 { -1.0f64 } else { 1.0 };
-    let exp = (h >> 10) & 0x1f;
-    let mant = (h & 0x3ff) as f64;
-    match exp {
-        0 => sign * mant * (2.0f64).powi(-24),
-        0x1f => {
-            if mant == 0.0 {
-                sign * f64::INFINITY
-            } else {
-                f64::NAN
-            }
+    let sign = ((h as u64) & 0x8000) << 48;
+    let exp = ((h >> 10) & 0x1f) as u64;
+    let mant = (h & 0x3ff) as u64;
+    let bits = match (exp, mant) {
+        (0, 0) => sign, // ±0
+        (0, _) => {
+            // Subnormal: value = mant × 2⁻²⁴ with mant in 1..=1023.
+            // Normalize: leading 1 at bit p → value = 1.f × 2^(p−24).
+            let p = 63 - mant.leading_zeros() as u64; // 0..=9
+            let e = p + 999; // (p − 24) + 1023 bias
+            let m = (mant ^ (1u64 << p)) << (52 - p); // clear leading 1, left-justify
+            sign | (e << 52) | m
         }
-        _ => sign * (1.0 + mant / 1024.0) * (2.0f64).powi(exp as i32 - 15),
-    }
+        (0x1f, 0) => sign | 0x7ff0_0000_0000_0000, // ±∞
+        (0x1f, _) => sign | 0x7ff8_0000_0000_0000 | (mant << 42), // NaN (payload preserved)
+        _ => sign | ((exp + 1023 - 15) << 52) | (mant << 42),
+    };
+    f64::from_bits(bits)
 }
 
 struct Decoder<'a> {
@@ -391,7 +405,7 @@ impl<'a> Decoder<'a> {
             }
             3 => {
                 let n = self.len_arg(info)?;
-                let s = std::str::from_utf8(self.take(n)?)
+                let s = core::str::from_utf8(self.take(n)?)
                     .map_err(|_| Error::Cbor("invalid UTF-8 in text string".into()))?;
                 Ok(Value::Text(s.to_owned()))
             }
@@ -472,7 +486,9 @@ pub struct MapBuilder {
 
 impl MapBuilder {
     pub fn new() -> Self {
-        MapBuilder { entries: Vec::new() }
+        MapBuilder {
+            entries: Vec::new(),
+        }
     }
 
     pub fn put(mut self, key: &str, value: Value) -> Self {
@@ -515,7 +531,10 @@ mod tests {
             (Value::Unsigned(24), vec![0x18, 24]),
             (Value::Unsigned(255), vec![0x18, 0xff]),
             (Value::Unsigned(256), vec![0x19, 0x01, 0x00]),
-            (Value::Unsigned(u32::MAX as u64), vec![0x1a, 0xff, 0xff, 0xff, 0xff]),
+            (
+                Value::Unsigned(u32::MAX as u64),
+                vec![0x1a, 0xff, 0xff, 0xff, 0xff],
+            ),
             (Value::Negative(0), vec![0x20]), // -1
         ] {
             assert_eq!(v.encode().unwrap(), expect);
@@ -578,7 +597,15 @@ mod tests {
         // 1/3 in f32 precision needs f32
         let f = 1.0f32 / 3.0;
         assert_eq!(Value::Float(f as f64).encode().unwrap()[0], 0xfa);
-        for x in [0.0, -0.0, 1.5, 0.1, 65504.0, 5.960464477539063e-8, f64::INFINITY] {
+        for x in [
+            0.0,
+            -0.0,
+            1.5,
+            0.1,
+            65504.0,
+            5.960464477539063e-8,
+            f64::INFINITY,
+        ] {
             assert_eq!(roundtrip(&Value::Float(x)), Value::Float(x));
         }
         // NaN canonical
@@ -586,6 +613,36 @@ mod tests {
             Value::Float(f64::NAN).encode().unwrap(),
             vec![0xf9, 0x7e, 0x00]
         );
+    }
+
+    #[test]
+    fn f16_conversion_exhaustive() {
+        // Exhaustively check the bit-level f16→f64 conversion against the
+        // arithmetic reference, and that every f16 round-trips through the
+        // shortest-form encoder.
+        for h in 0..=u16::MAX {
+            let got = f16_to_f64(h);
+            let sign = if h & 0x8000 != 0 { -1.0f64 } else { 1.0 };
+            let exp = (h >> 10) & 0x1f;
+            let mant = (h & 0x3ff) as f64;
+            let want = match exp {
+                0 => sign * mant * (2.0f64).powi(-24),
+                0x1f => {
+                    if mant == 0.0 {
+                        sign * f64::INFINITY
+                    } else {
+                        f64::NAN
+                    }
+                }
+                _ => sign * (1.0 + mant / 1024.0) * (2.0f64).powi(exp as i32 - 15),
+            };
+            if want.is_nan() {
+                assert!(got.is_nan(), "h={h:04x}");
+            } else {
+                assert_eq!(got.to_bits(), want.to_bits(), "h={h:04x}");
+                assert_eq!(f32_to_f16_exact(got as f32), Some(h), "h={h:04x}");
+            }
+        }
     }
 
     #[test]

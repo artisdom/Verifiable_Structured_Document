@@ -1,5 +1,10 @@
 /target
+/fuzz/target
+/fuzz/corpus
+/fuzz/artifacts
+/fuzz/coverage
 *.vsd
+!testdata/**/*.vsd
 *.key
 *.key.pub
 /.claude

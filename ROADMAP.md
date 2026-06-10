@@ -39,7 +39,7 @@ derived; container as dumb transport. Each layer is independently verifiable.
 
 ```
 Phase 0  Foundations (canonical layer)        ████████████████████  SHIPPED (v0.1)
-Phase 1  Hardening & ecosystem hygiene        ████░░░░░░░░░░░░░░░░  in progress
+Phase 1  Hardening & ecosystem hygiene        ███████████████████░  SHIPPED (v0.3) — crates.io publish awaits public repo
 Phase 2  The render layer (vsd-layout)        ░░░░░░░░░░░░░░░░░░░░  next major effort
 Phase 3  PDF interop (the adoption wedge)     ░░░░░░░░░░░░░░░░░░░░
 Phase 4  Viewing & authoring experience       ░░░░░░░░░░░░░░░░░░░░
@@ -114,37 +114,64 @@ The complete canonical layer, working end to end. What exists today:
 
 ---
 
-## 4. Phase 1 — Hardening & ecosystem hygiene *(now → v0.3)*
+## 4. Phase 1 — Hardening & ecosystem hygiene ✅ *shipped as v0.3*
 
 Make what exists trustworthy enough that other people can bet on it.
 
-- [ ] **Fuzzing**: `cargo-fuzz` targets for the CBOR decoder, container
-      parser, tree decoder, and expression parser. The strict grammar makes
-      these very fuzzable — that was the point. Run continuously in CI
-      (OSS-Fuzz application once public).
-- [ ] **Public conformance test vectors**: a `testdata/` corpus of valid and
-      invalid `.vsd` files with expected outcomes, so a second implementation
-      can be tested without reading our source. This is the seed of I4.
-- [ ] **CI matrix**: Linux/macOS/Windows, stable + MSRV (1.85), plus
-      `wasm32-unknown-unknown` for vsd-core (no I/O in core makes this cheap).
-- [ ] **API documentation pass** + `docs.rs` polish + `cargo-semver-checks`.
-- [ ] **`no_std + alloc` support for vsd-core** — opens embedded verifiers
-      (passport readers, access-control hardware, HSMs).
-- [ ] **Property-based tests** (`proptest`): roundtrip invariants
-      (`decode(encode(x)) == x`), canonical-form idempotence, redaction
-      never leaks (generated documents, generated redaction paths, byte scan).
-- [ ] **Streaming/ranged reader** (§9): page-index object generation, lazy
-      object loading over `Read + Seek`, HTTP range-request client behind a
-      feature flag. The chunk layout already supports it.
-- [ ] **Filled-form value layer**: filled instances as an object layer over
-      the immutable blank form; defined flattening merge (§6). The expression
-      evaluator is done; this is the persistence story.
-- [ ] **Security review & threat-model doc**: written adversarial analysis of
-      the container parser; external audit before 1.0.
-- [ ] **crates.io release** of all four crates; reproducible release builds.
+- [x] **Fuzzing**: `cargo-fuzz` targets (`fuzz/`) for the CBOR decoder,
+      container parser (eager + streaming), tree decoder, and expression
+      parser — each asserting its bijection/fixpoint property, not just
+      "no panic". Seeded from the conformance vectors; CI smoke-runs every
+      target per push. (OSS-Fuzz application once the repo is public.)
+- [x] **Public conformance test vectors**: `testdata/` corpus of 5 valid +
+      6 invalid `.vsd` files with a machine-readable expectation manifest
+      (`vectors.json`), regenerated deterministically by
+      `cargo run -p xtask -- gen-vectors` (fixed Ed25519 test seed; RFC 8032
+      signing is deterministic). Includes adversarial vectors with
+      *checksum-fixed-up* tampering that only the identity cross-checks can
+      catch. Runner: `crates/vsd-cli/tests/conformance.rs`. The seed of I4.
+- [x] **CI matrix** (`.github/workflows/ci.yml`): Linux/macOS/Windows tests,
+      MSRV (1.85), fmt + clippy (`-D warnings`), rustdoc with broken-link
+      errors, vector-reproducibility gate, `wasm32-unknown-unknown` *and*
+      bare-metal `thumbv7em-none-eabihf` builds of vsd-core, fuzz smoke job,
+      `cargo-semver-checks` (advisory until first publish).
+- [x] **API documentation pass** + `docs.rs` all-features metadata +
+      semver-checks in CI.
+- [x] **`no_std + alloc` support for vsd-core** — verified against a
+      Cortex-M target. Float plumbing rewritten as bit-exact integer ops
+      (f16↔f64 conversion, round-half-even) — better for cross-platform
+      determinism even on std. Caveat: regex-valid expressions parse but
+      don't evaluate without `std` (embedded *verifiers* check structure
+      and signatures, not forms).
+- [x] **Property-based tests** (`proptest`): CBOR roundtrip, map-order
+      independence, decode-never-panics, **accepted-bytes-are-canonical-
+      fixpoint** (the no-polyglot property), float shortest-form roundtrip,
+      container roundtrip on generated documents, and redaction-never-leaks
+      (byte-scan of container output *and* every store object).
+- [x] **Streaming/ranged reader** (§9): `RangeSource` trait (any
+      `Read + Seek` works out of the box; HTTP transports implement the
+      trait), lazy `StreamReader` with per-object hash verification on
+      fetch, `PageIndex` object type, `page_closure()` for
+      fetch-exactly-page-47 access. A lying range server is caught at the
+      first touched object.
+- [x] **Filled-form value layer**: `field-layer` manifest slot,
+      `FilledLayer` object, `fill()` (overlay semantics, kind checking,
+      computed-field evaluation in topological order with cycle rejection
+      `E_FIELD_CYCLE`), `flatten()` as the defined merge (§6) gated on all
+      constraints passing, CLI `vsd fill --set id=value` / `vsd flatten`.
+      Redaction drops the layer (filled values may quote redacted content).
+- [x] **Threat-model doc** ([docs/THREAT_MODEL.md](docs/THREAT_MODEL.md)):
+      assets, adversaries, per-surface mitigations mapped to tests and
+      vectors, honest residual-risk list. Plus [SECURITY.md](SECURITY.md)
+      reporting policy. External audit remains a pre-1.0 gate (§11).
+- [ ] **crates.io release** — code and metadata are release-ready;
+      publishing is blocked only on the repository going public and an
+      owner account. First publish flips semver-checks from advisory to
+      hard gate.
 
-**Exit criteria:** a hostile-input bug bounty would be boring; a second
-implementer needs only the spec + test vectors.
+**Exit criteria — met:** a hostile-input bug bounty would be boring (every
+parser fuzzed with property assertions, every bound tested); a second
+implementer needs only the spec + `testdata/`.
 
 ---
 
@@ -388,8 +415,8 @@ core spec before a working prototype and an adversarial review.
 | Version | Theme | Headline |
 |---|---|---|
 | **0.1** ✅ | Canonical layer | Sign, verify, redact, diff — structure-only |
-| 0.2 | Hardening | Fuzzing, proptests, conformance vectors, crates.io |
-| 0.3 | Streaming + filled forms | Ranged reads; form instances |
+| **0.2** ✅ | Hardening | Fuzzing, proptests, conformance vectors, CI matrix, `no_std` |
+| **0.3** ✅ | Streaming + filled forms | Ranged reads with lazy verification; fill/flatten lifecycle (0.2 + 0.3 shipped together as the Phase 1 release) |
 | 0.4 | `vsd-layout/1.0` | Deterministic layout (minimal profile), `verify --recompute` |
 | 0.5 | Rendering | Rasterizer, golden-image conformance, `vsd-view` alpha |
 | 0.6 | PDF export | Lossless VSD→PDF (tagged, PDF/A mode) |
@@ -406,8 +433,9 @@ crates keep evolving.
 
 ## 12. How to contribute / what to pick up
 
-- **Want maximum leverage now?** Phase 1 fuzzing or conformance vectors —
-  small, self-contained, and they de-risk everything after.
+- **Want maximum leverage now?** Grow the conformance corpus (`testdata/`)
+  with adversarial vectors, or run long fuzz campaigns against the targets
+  in `fuzz/` — the harnesses exist; depth is what's wanted.
 - **Want the hard problem?** Phase 2a, the determinism contract. It is a
   document, not code, and it is the heart of the entire format.
 - **Want adoption?** Phase 3a (PDF export) is mechanical, demoable, and the
