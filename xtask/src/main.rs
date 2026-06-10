@@ -97,6 +97,25 @@ fn gen_vectors() -> Result<()> {
         "note": "field layer with filled values, computed field, and constraints",
     }));
 
+    // Laid-out vector: the cross-platform layout determinism proof.
+    // vectors.json is generated on one OS and CI regenerates + diffs it
+    // on another — if integer-µm layout were not platform-identical,
+    // this hash would not survive the trip.
+    let laid = vsd_layout::add_render_cache(&minimal, &vsd_layout::LayoutOptions::default())?;
+    let laid_bytes = write_document(&laid, &[], &WriteOptions { compress: false })?;
+    write(&valid.join("laid-out.vsd"), &laid_bytes)?;
+    let cache = laid.render_cache()?.expect("cache present");
+    valid_entries.push(json!({
+        "file": "valid/laid-out.vsd",
+        "doc_id": laid.document_id()?.to_hex(),
+        "predecessor": minimal.document_id()?.to_hex(),
+        "profile": "core",
+        "layout_engine": format!("{}/{}", vsd_layout::ENGINE_NAME, vsd_layout::ENGINE_VERSION),
+        "layout_hash": hex::encode(cache.layout_hash),
+        "layout_pages": cache.pages.len(),
+        "note": "render cache from vsd-layout/1.0; recomputing layout MUST reproduce these exact page objects (LAYOUT-1.0.md)",
+    }));
+
     let (redacted, predecessor_id, proof) = redacted_doc()?;
     let red_bytes = write_document(&redacted, &[], &WriteOptions { compress: false })?;
     write(&valid.join("redacted.vsd"), &red_bytes)?;

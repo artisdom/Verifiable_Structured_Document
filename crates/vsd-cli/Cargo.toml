@@ -16,6 +16,8 @@ path = "src/main.rs"
 
 [dependencies]
 vsd-core = { workspace = true, features = ["std"] }
+vsd-layout = { workspace = true }
+vsd-render = { workspace = true }
 vsd-container = { workspace = true, features = ["zstd"] }
 vsd-sign = { workspace = true }
 clap = { workspace = true }

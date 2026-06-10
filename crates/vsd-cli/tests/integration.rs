@@ -512,6 +512,199 @@ fn stream_reader_rejects_substituted_object() {
 }
 
 #[test]
+fn layout_roundtrip_and_recompute() {
+    let doc = sample_document();
+    let laid = vsd_layout::add_render_cache(&doc, &vsd_layout::LayoutOptions::default()).unwrap();
+
+    // Identity changed (manifest commits to the cache); chain recorded.
+    assert_eq!(laid.manifest.predecessor, Some(doc.document_id().unwrap()));
+    let cache = laid.render_cache().unwrap().unwrap();
+    assert_eq!(cache.engine_name, vsd_layout::ENGINE_NAME);
+    assert!(!cache.pages.is_empty());
+
+    // Survives the container; validates; recomputes byte-identically.
+    let bytes = write_document(&laid, &[], &WriteOptions::default()).unwrap();
+    let back = read_document(&bytes, &ReadOptions::default()).unwrap();
+    let report = vsd_core::validate::validate(&back.document);
+    assert!(report.is_valid(), "findings: {:?}", report.findings);
+    assert_eq!(report.warnings().count(), 0, "no orphans expected");
+    assert!(matches!(
+        vsd_layout::verify_render_cache(&back.document).unwrap(),
+        vsd_layout::RecomputeOutcome::Match { .. }
+    ));
+
+    // The page index closure carries the figure's blob for its page.
+    let pi_id = back.document.manifest.page_index.unwrap();
+    let pi =
+        vsd_core::manifest::PageIndex::from_value(&back.document.store.get_value(&pi_id).unwrap())
+            .unwrap();
+    let all: Vec<_> = pi.pages.iter().flatten().collect();
+    let resources = back.document.resources().unwrap();
+    let blob_id = resources.entries[0].1.data;
+    assert!(
+        all.contains(&&blob_id),
+        "page closure must include placed resources"
+    );
+
+    // Text runs carry back-references into the tree.
+    let page = vsd_core::layout::Page::from_value(
+        &back.document.store.get_value(&cache.pages[0]).unwrap(),
+    )
+    .unwrap();
+    let has_fee_run = page.ops.iter().any(|op| {
+        matches!(op, vsd_core::layout::DisplayOp::TextRun { text, node_path, .. }
+            if text.contains("$400") && node_path == &vec![1, 0])
+    });
+    assert!(
+        has_fee_run,
+        "fee paragraph must be a text run with path 1.0"
+    );
+}
+
+#[test]
+fn lying_render_cache_is_caught_only_by_recompute() {
+    // The §5.3 attack: a render cache whose pixels disagree with the
+    // content tree. Build document A, but graft on the cache generated
+    // from document B (same shape, different fee).
+    let a = sample_document();
+    let b = {
+        let mut builder = DocumentBuilder::new(Node::Doc(Doc {
+            lang: "en".into(),
+            dir: Direction::Ltr,
+            children: vec![Node::Para(Para {
+                children: vec![Inline::Text(
+                    "The fee is $800 per month, payable in arrears.".into(),
+                )],
+            })],
+        }));
+        let _ = &mut builder;
+        builder.build().unwrap()
+    };
+    let laid_b = vsd_layout::add_render_cache(&b, &vsd_layout::LayoutOptions::default()).unwrap();
+
+    // Franken-document: A's content, B's render cache.
+    let mut store = a.store.clone();
+    for (id, bytes) in laid_b.store.iter() {
+        store.put_verified(bytes.to_vec(), Some(*id)).unwrap();
+    }
+    let manifest = vsd_core::Manifest {
+        render_cache: laid_b.manifest.render_cache,
+        page_index: laid_b.manifest.page_index,
+        ..a.manifest.clone()
+    };
+    let franken = Document { manifest, store };
+
+    // Every *structural* check passes: object hashes are genuine, the
+    // layout-hash is consistent with its own page list…
+    let report = vsd_core::validate::validate(&franken);
+    assert!(
+        report.is_valid(),
+        "structural validation cannot catch a grafted cache: {:?}",
+        report.findings
+    );
+    // …only recomputation exposes that the pixels lie about the tree.
+    assert!(matches!(
+        vsd_layout::verify_render_cache(&franken).unwrap(),
+        vsd_layout::RecomputeOutcome::Mismatch { .. }
+    ));
+}
+
+#[test]
+fn long_documents_paginate_deterministically() {
+    let children: Vec<Node> = (0..120)
+        .map(|i| {
+            Node::Para(Para {
+                children: vec![Inline::Text(format!(
+                    "Paragraph {i}: the quick brown fox jumps over the lazy dog, \
+                     repeatedly and at considerable length, to fill the measure."
+                ))],
+            })
+        })
+        .collect();
+    let doc = DocumentBuilder::new(Node::Doc(Doc {
+        lang: "en".into(),
+        dir: Direction::Ltr,
+        children,
+    }))
+    .build()
+    .unwrap();
+
+    let opts = vsd_layout::LayoutOptions::default();
+    let pages = vsd_layout::layout_document(&doc, &opts).unwrap();
+    assert!(pages.len() > 1, "120 paragraphs must span multiple pages");
+    for p in &pages {
+        assert!(!p.ops.is_empty(), "no empty pages in the middle");
+    }
+    // Determinism: laying out twice yields identical page encodings.
+    let again = vsd_layout::layout_document(&doc, &opts).unwrap();
+    assert_eq!(pages.len(), again.len());
+    for (x, y) in pages.iter().zip(&again) {
+        assert_eq!(
+            x.to_value().encode().unwrap(),
+            y.to_value().encode().unwrap()
+        );
+    }
+}
+
+#[test]
+fn rtl_is_refused_by_engine_1_0() {
+    let doc = DocumentBuilder::new(Node::Doc(Doc {
+        lang: "ar".into(),
+        dir: Direction::Rtl,
+        children: vec![],
+    }))
+    .build()
+    .unwrap();
+    assert!(matches!(
+        vsd_layout::layout_document(&doc, &vsd_layout::LayoutOptions::default()),
+        Err(vsd_layout::LayoutError::Unsupported(_))
+    ));
+}
+
+#[test]
+fn rasterizer_renders_and_is_stable() {
+    let doc = sample_document();
+    let laid = vsd_layout::add_render_cache(&doc, &vsd_layout::LayoutOptions::default()).unwrap();
+    let cache = laid.render_cache().unwrap().unwrap();
+    let page = vsd_core::layout::Page::from_value(&laid.store.get_value(&cache.pages[0]).unwrap())
+        .unwrap();
+
+    let png1 = vsd_render::render_page_png(&laid, &page, 96.0).unwrap();
+    let png2 = vsd_render::render_page_png(&laid, &page, 96.0).unwrap();
+    assert_eq!(png1, png2, "rasterization must be stable");
+
+    // The page is not blank: some non-white pixel exists.
+    let pixmap = vsd_render::render_page(&laid, &page, 96.0).unwrap();
+    let blank = pixmap
+        .pixels()
+        .iter()
+        .all(|p| p.red() == 255 && p.green() == 255 && p.blue() == 255);
+    assert!(!blank, "rendered page must contain ink");
+}
+
+#[test]
+fn redaction_invalidates_render_cache_and_relayout_recovers() {
+    let doc = sample_document();
+    let laid = vsd_layout::add_render_cache(&doc, &vsd_layout::LayoutOptions::default()).unwrap();
+    let redacted = vsd_core::redact::redact(&laid, &[1, 1], Some("account".into())).unwrap();
+    assert!(redacted.cache_invalidated);
+    assert!(redacted.document.manifest.render_cache.is_none());
+
+    // Re-layout the redacted document: the redaction bar is in the cache,
+    // the secret is not.
+    let relaid =
+        vsd_layout::add_render_cache(&redacted.document, &vsd_layout::LayoutOptions::default())
+            .unwrap();
+    assert!(matches!(
+        vsd_layout::verify_render_cache(&relaid).unwrap(),
+        vsd_layout::RecomputeOutcome::Match { .. }
+    ));
+    let bytes = write_document(&relaid, &[], &WriteOptions { compress: false }).unwrap();
+    let needle = b"12-3456-789";
+    assert!(!bytes.windows(needle.len()).any(|w| w == needle));
+}
+
+#[test]
 fn subtree_signature_scope() {
     let doc = sample_document();
     let key = vsd_sign::SigningKey::generate();

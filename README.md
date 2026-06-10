@@ -37,7 +37,9 @@ four properties that matter and removes the failure modes by construction:
 | [`vsd-core`](crates/vsd-core) | Deterministic CBOR (RFC 8949 §4.2, strict both ways) · content-addressed object store · content tree · manifest & profiles · validation · destructive redaction · forms + fill/flatten · object-set diff · render-layer types. `no_std + alloc` capable. |
 | [`vsd-container`](crates/vsd-container) | The `.vsd` chunk container: 32-byte header, BLAKE3-checksummed chunks, object index, signature blocks, trailer; zstd optional; lazy `StreamReader` for ranged access |
 | [`vsd-sign`](crates/vsd-sign) | Ed25519 signatures over document/subtree Merkle roots, with domain separation (wire format reserves `ecdsa-p256`, `ml-dsa-65`) |
-| [`vsd-cli`](crates/vsd-cli) | The `vsd` tool: `pack`, `info`, `validate`, `extract`, `objects`, `keygen`, `sign`, `verify`, `redact`, `diff`, `fill`, `flatten` |
+| [`vsd-layout`](crates/vsd-layout) | The reference layout engine **vsd-layout/1.0**: a deterministic projection from content tree to display lists — integer-µm arithmetic, pinned Noto Sans, normative contract in [docs/LAYOUT-1.0.md](docs/LAYOUT-1.0.md) |
+| [`vsd-render`](crates/vsd-render) | Rasterizer: display-list pages → PNG via tiny-skia, drawing with the same pinned font the engine measured with |
+| [`vsd-cli`](crates/vsd-cli) | The `vsd` tool: `pack`, `info`, `validate`, `extract`, `objects`, `keygen`, `sign`, `verify [--recompute]`, `redact`, `diff`, `fill`, `flatten`, `layout`, `render` |
 
 ## Quick start
 
@@ -76,6 +78,24 @@ Text extraction is a tree walk, not OCR-adjacent heuristics:
 ```console
 $ vsd extract agreement.vsd          # exact reading-order plain text
 $ vsd extract agreement.vsd --format json   # full content tree
+```
+
+Lay out, verify that pixels match meaning, and rasterize:
+
+```console
+$ vsd layout agreement.vsd -o agreement-laid.vsd
+laid out 1 page(s) with vsd-layout/1.0.0
+layout-hash    : 675a4fea43443a15…
+
+# Re-runs the engine and requires byte-identical page objects — the
+# check PDF structurally cannot offer. A render cache that lies about
+# the content tree dies here:
+$ vsd verify agreement-laid.vsd --recompute
+recompute   : OK — 1 page(s) re-laid out, byte-identical to the cache;
+              pixels and meaning agree
+VERIFIED
+
+$ vsd render agreement-laid.vsd --page 1 -o page1.png --dpi 144
 ```
 
 ## Library use
@@ -162,15 +182,34 @@ CLI.
 - **Threat model** ([docs/THREAT_MODEL.md](docs/THREAT_MODEL.md)) and
   [security policy](SECURITY.md).
 
+**Implemented (v0.5, Phase 2 — the render layer):**
+
+- **`vsd-layout/1.0`**, the reference layout engine: a deterministic
+  projection from content tree to display lists. All layout arithmetic is
+  integer micrometers (no float ordering to pin); the font (Noto Sans
+  Regular v2.015) and metrics parser are pinned by hash and exact version;
+  line breaking is an enumerated UAX #14 subset. Normative contract:
+  [docs/LAYOUT-1.0.md](docs/LAYOUT-1.0.md). Coverage: single-column LTR with
+  paragraphs, headings, lists, code, ruled tables, figures, filled fields,
+  and redaction bars; greedy pagination with keep-with-next.
+- **`vsd verify --recompute`** — the spec §5.3 promise made real: re-runs
+  the engine and requires byte-identical page objects. A grafted cache from
+  different content passes every structural check and is caught *only* by
+  recomputation (there's a test proving exactly that).
+- **`vsd-render` + `vsd render`** — display lists to PNG via tiny-skia,
+  drawing glyph outlines from the same pinned font the engine measured with.
+- **Cross-platform determinism, CI-enforced**: the conformance corpus now
+  carries a laid-out vector with a golden layout hash, generated on Windows
+  and reproduced on Linux/macOS on every push.
+
 **Not yet implemented (the honest list, spec §13):**
 
-- **The reference layout engine** (`vsd-layout`) — deterministic text shaping
-  and pagination is the format's hardest problem; the render-cache types,
-  display-list format, layout-hash verification, and engine trait are in
-  place, the engine is not. Until then VSD operates "structure-only", which
-  already covers signing, redaction, archival, and machine readability.
-- A rasterizer / viewer.
-- PDF interop converters (PDF→VSD structure recovery; VSD→PDF export).
+- Layout engine widening (engine 1.1+): RTL/bidi, CJK, complex scripts,
+  bold/italic faces, justification/hyphenation, incremental relayout.
+  Engine 1.0 refuses what it cannot lay out rather than mis-rendering it.
+- A viewer (`vsd-view`); the WASM viewer track.
+- PDF interop converters (PDF→VSD structure recovery; VSD→PDF export — the
+  display lists to export from now exist).
 - X.509 chains, RFC 3161 timestamps, and post-quantum (`ml-dsa-65`) signatures
   — wire format reserves all three.
 - crates.io publication (release-ready; awaits the repository going public).

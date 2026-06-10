@@ -65,6 +65,16 @@
       "profile": "form"
     },
     {
+      "doc_id": "611511143af22c1d69d5a0d6bb67f527b200f8da1be02344fc9633d9273cf08a",
+      "file": "valid/laid-out.vsd",
+      "layout_engine": "vsd-layout/1.0.0",
+      "layout_hash": "d8855aa04af0521620012ab4286784a882160adc4b0a75fa63d4eb2911b75335",
+      "layout_pages": 1,
+      "note": "render cache from vsd-layout/1.0; recomputing layout MUST reproduce these exact page objects (LAYOUT-1.0.md)",
+      "predecessor": "81fd372ab77a19ae22a25d0aca1d1ae124a21f03bd87965663550264e14a4130",
+      "profile": "core"
+    },
+    {
       "doc_id": "52a60076fc838c6b1216cc4ecad6b6c3fa0a72b5807cd59316db2cc093d19533",
       "file": "valid/redacted.vsd",
       "must_not_contain": "TOP-SECRET-ACCOUNT-9912",

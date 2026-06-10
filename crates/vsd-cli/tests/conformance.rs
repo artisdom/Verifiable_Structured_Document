@@ -67,6 +67,26 @@ fn valid_vectors_accepted_with_expected_identity() {
                 "{file}: predecessor chain"
             );
         }
+        if let Some(expected_hash) = entry["layout_hash"].as_str() {
+            // The cross-platform layout determinism gate: re-run the
+            // engine on THIS machine and require the recorded hash.
+            let cache = vsd.document.render_cache().unwrap().expect("cache");
+            assert_eq!(
+                hex::encode(cache.layout_hash),
+                expected_hash,
+                "{file}: stored layout hash"
+            );
+            if let Some(n) = entry["layout_pages"].as_u64() {
+                assert_eq!(cache.pages.len() as u64, n, "{file}: page count");
+            }
+            match vsd_layout::verify_render_cache(&vsd.document).unwrap() {
+                vsd_layout::RecomputeOutcome::Match { .. } => {}
+                other => panic!(
+                    "{file}: recomputation must reproduce the cache byte-identically \
+                     on every platform, got {other:?}"
+                ),
+            }
+        }
         if let Some(secret) = entry["must_not_contain"].as_str() {
             let bytes = std::fs::read(&path).unwrap();
             assert!(

@@ -92,7 +92,16 @@ anchored. Computed-field dependency cycles are rejected at validation
 (`E_FIELD_CYCLE`). Evidence: `expr_decode` fuzz target evaluates every
 accepted expression; `backreferences_rejected`, `depth_bounded` tests.
 
-### 7. Supply chain & implementation
+### 7. Layout engine (`vsd-layout`) — A1, A4
+
+| Threat | Mitigation |
+|---|---|
+| Cache shows different content than the tree (shadow text, contract swap) | Recomputation verification: byte-identical page objects required; integer-µm arithmetic makes the result platform-invariant, so a verifier on any OS reaches the same verdict (golden-hash conformance vector, CI-enforced cross-platform) |
+| Hostile document drives pathological layout cost | Cost is linear in content size; content size is bounded by the container's chunk caps; tree depth is bounded by the CBOR `MAX_DEPTH` |
+| Arithmetic overflow | All scaled products go through one 128-bit-intermediate primitive; µm magnitudes for any physical document are ≤ 10⁹, far inside i64 |
+| Engine-version confusion | The cache pins engine name+version; verification of an unknown engine reports `UnknownEngine` rather than silently passing or guessing |
+
+### 8. Supply chain & implementation
 
 - `#![forbid(unsafe_code)]` in all four crates (compiler-enforced).
 - Dependency surface kept deliberately small: blake3, zstd,
@@ -106,10 +115,14 @@ accepted expression; `backreferences_rejected`, `depth_bounded` tests.
 
 1. **No X.509/PKI validation yet** — signatures verify against raw keys;
    trust distribution is the caller's problem until Phase 5a.
-2. **Layout-hash recomputation** requires the reference layout engine
-   (Phase 2); until then the cache's structural integrity is verified,
-   but not its faithfulness to the content tree. VSD/Core documents
-   without a render cache are unaffected.
+2. **Render-cache faithfulness is verified on demand, not on load** —
+   `vsd verify --recompute` re-runs `vsd-layout/1.0` and requires
+   byte-identical page objects (a grafted cache passes structural checks
+   and is caught only by recomputation; tested). Recomputation is
+   opt-in because it costs a full layout pass; readers that display a
+   cache without recomputing trust the cache for speed, per spec §5.3.
+   Caches from unknown engine versions cannot be recomputed by this
+   build and verify as such, explicitly.
 3. **`no_std` builds do not evaluate regex constraints** (documented;
    embedded verifiers check structure and signatures, not forms).
 4. **Timing side channels** are not considered: verification operates on

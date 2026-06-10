@@ -40,8 +40,8 @@ derived; container as dumb transport. Each layer is independently verifiable.
 ```
 Phase 0  Foundations (canonical layer)        ████████████████████  SHIPPED (v0.1)
 Phase 1  Hardening & ecosystem hygiene        ███████████████████░  SHIPPED (v0.3) — crates.io publish awaits public repo
-Phase 2  The render layer (vsd-layout)        ░░░░░░░░░░░░░░░░░░░░  next major effort
-Phase 3  PDF interop (the adoption wedge)     ░░░░░░░░░░░░░░░░░░░░
+Phase 2  The render layer (vsd-layout)        ████████████████░░░░  SHIPPED (v0.5) — minimal profile; widening (2f) + incremental (2g) open
+Phase 3  PDF interop (the adoption wedge)     ░░░░░░░░░░░░░░░░░░░░  next major effort
 Phase 4  Viewing & authoring experience       ░░░░░░░░░░░░░░░░░░░░
 Phase 5  Trust infrastructure at scale        ░░░░░░░░░░░░░░░░░░░░
 Phase 6  Standardization & governance         ░░░░░░░░░░░░░░░░░░░░
@@ -175,48 +175,68 @@ implementer needs only the spec + `testdata/`.
 
 ---
 
-## 5. Phase 2 — The render layer: `vsd-layout` *(the hard one)*
+## 5. Phase 2 — The render layer: `vsd-layout` ✅ *minimal profile shipped as v0.5*
 
 Spec §5 and §13.1: **deterministic layout is the format's hardest problem and
-its deepest moat.** When this ships, "what you see ≠ what the text says"
-becomes a *cryptographically detectable* condition — the one thing PDF can
-never offer.
+its deepest moat.** As of v0.5, "what you see ≠ what the text says" is a
+*mechanically detectable* condition (`vsd verify --recompute`) — the one
+thing PDF can never offer.
 
-Strategy: don't boil the ocean. Ship determinism for a constrained profile
-first, widen coverage version by version. The engine is versioned
+Strategy held: don't boil the ocean. Determinism shipped for a constrained
+profile first; coverage widens version by version. The engine is versioned
 (`vsd-layout/1.0`); documents pin the version; old caches stay verifiable
 forever against their pinned engine.
 
-- [ ] **2a. Determinism contract document** — the normative text that makes
-      or breaks I4:
-      - pinned text-shaping behavior (vendored HarfBuzz revision via
-        `harfruzz`/pure-Rust shaper, with a bug-compatibility list)
-      - Unicode line breaking (UAX #14) with an explicitly enumerated
-        tailoring table
-      - f64 round-to-nearest-even with a *defined operation order* (no FMA,
-        no reassociation; written as scalar evaluation order in the spec)
-      - hyphenation: none in 1.0 (deterministic ≫ pretty, initially)
-- [ ] **2b. `vsd-layout/1.0` minimal profile**: single-column block layout,
-      pinned default font family (embedded Noto subset), paragraphs/headings/
-      lists/code/tables (fixed algorithm), figures as boxes, page breaking.
-      Latin + common European scripts first.
-- [ ] **2c. Layout-hash verification** end to end: `vsd verify --recompute`
-      re-runs layout and compares against the cache. *This is the killer
-      demo:* a tampered cache that shows different pixels than the signed
-      content fails verification, mechanically.
-- [ ] **2d. Rasterizer** (`vsd-render`): display lists → PNG/SVG via
-      `tiny-skia`. Needed for visual conformance tests ("golden image" suite)
-      and the viewer.
-- [ ] **2e. Cross-platform determinism CI**: byte-identical page objects on
-      x86-64 Linux/Windows/macOS and ARM64 — the proof I4 holds in practice.
+- [x] **2a. Determinism contract document**
+      ([docs/LAYOUT-1.0.md](docs/LAYOUT-1.0.md)) — and one strategy upgrade
+      over the original plan: instead of "defined f64 operation order", all
+      layout arithmetic is **integer micrometers** with a single rounding
+      primitive (`muldiv`, 128-bit intermediate). No float order to define;
+      platform variance is impossible by construction. Floats appear only at
+      display-list emission as single exact conversions. Line breaking is an
+      exhaustively enumerated UAX #14 subset (two break classes); shaping is
+      pinned to the embedded font's cmap/hmtx (no ligatures/kerning in 1.0);
+      no hyphenation. Pinned font: **Noto Sans Regular v2.015** (OFL,
+      SHA-256 in the contract); pinned metrics parser (`ttf-parser`, exact
+      version). HarfBuzz-class shaping is deferred to the engine version
+      that introduces complex scripts (2f).
+- [x] **2b. `vsd-layout/1.0` minimal profile**: single-column LTR block
+      layout — paragraphs, headings (keep-with-next), lists, code (verbatim
+      + tab stops), tables (weighted columns, ruled grid, header background,
+      row-atomic pagination), figures (PNG intrinsic sizing + captions),
+      fields (rendered with filled/computed values or blanks), redaction
+      bars, page-break hints; greedy pagination with line-level splitting.
+      Latin/Greek/Cyrillic via the embedded font.
+- [x] **2c. Layout-hash verification end to end**: `vsd layout` attaches a
+      cache + page index (successor document, predecessor chained);
+      `vsd verify --recompute` re-runs the engine and requires byte-identical
+      page objects. The killer demo is a test: a document carrying a
+      *grafted* cache from different content passes every structural check —
+      genuine hashes, consistent layout-hash — and only recomputation
+      exposes the lie (`lying_render_cache_is_caught_only_by_recompute`).
+- [x] **2d. Rasterizer** (`vsd-render`): display lists → PNG via tiny-skia;
+      glyph outlines from the same pinned font the engine measured with;
+      PNG resources composited; `vsd render --page N --dpi N`. The display
+      list remains the normative artifact; pixels are an informative view.
+- [x] **2e. Cross-platform determinism CI**: the conformance corpus gained
+      `valid/laid-out.vsd` with a **golden layout hash** — generated on
+      Windows, regenerated and diffed on Linux in CI, recomputed by the
+      test suite on all three OSes. Byte-identical page objects, proven on
+      every push.
 - [ ] **2f. Widening, versioned**: RTL + bidi (1.1), CJK + vertical text
-      (1.2), complex scripts/Indic (1.3), floats & multi-column (1.4),
-      math layout from MathML Core (1.5), justification + hyphenation (1.6).
+      (1.2), complex scripts/Indic via a pinned pure-Rust shaper (1.3),
+      floats & multi-column (1.4), math layout from MathML Core (1.5),
+      justification + hyphenation (1.6), bold/italic faces. Engine 1.0
+      refuses what it cannot lay out (`dir=rtl` errors rather than
+      mis-rendering).
 - [ ] **2g. Incremental relayout** (§13.2): per-section layout fences so a
       one-paragraph edit in a 10k-page manual doesn't re-paginate the world.
 
-**Exit criteria:** two machines, two OSes, one document → bit-identical
-render cache; the conformance suite contains pixel-exact golden vectors.
+**Exit criteria — met for the minimal profile:** two machines, two OSes, one
+document → bit-identical render cache (CI-enforced via the golden vector);
+the conformance suite carries layout vectors. Pixel-exact golden *images*
+remain deliberately out of scope: the raster is informative, the display
+list is normative.
 
 ---
 
@@ -417,8 +437,8 @@ core spec before a working prototype and an adversarial review.
 | **0.1** ✅ | Canonical layer | Sign, verify, redact, diff — structure-only |
 | **0.2** ✅ | Hardening | Fuzzing, proptests, conformance vectors, CI matrix, `no_std` |
 | **0.3** ✅ | Streaming + filled forms | Ranged reads with lazy verification; fill/flatten lifecycle (0.2 + 0.3 shipped together as the Phase 1 release) |
-| 0.4 | `vsd-layout/1.0` | Deterministic layout (minimal profile), `verify --recompute` |
-| 0.5 | Rendering | Rasterizer, golden-image conformance, `vsd-view` alpha |
+| **0.4** ✅ | `vsd-layout/1.0` | Deterministic layout (minimal profile), `verify --recompute` |
+| **0.5** ✅ | Rendering | Rasterizer + golden layout-hash conformance (0.4 + 0.5 shipped together as the Phase 2 release; `vsd-view` alpha moved to Phase 4a where it belongs) |
 | 0.6 | PDF export | Lossless VSD→PDF (tagged, PDF/A mode) |
 | 0.7 | PDF import | Tagged import + heuristic recovery + `vsd migrate` |
 | 0.8 | Web + bindings | WASM viewer, Python/TS authoring |
@@ -436,10 +456,12 @@ crates keep evolving.
 - **Want maximum leverage now?** Grow the conformance corpus (`testdata/`)
   with adversarial vectors, or run long fuzz campaigns against the targets
   in `fuzz/` — the harnesses exist; depth is what's wanted.
-- **Want the hard problem?** Phase 2a, the determinism contract. It is a
-  document, not code, and it is the heart of the entire format.
+- **Want the hard problem?** Phase 2f — widening `vsd-layout` to RTL/bidi
+  (engine 1.1) while keeping the determinism contract airtight; the 1.0
+  contract (docs/LAYOUT-1.0.md) shows the required rigor.
 - **Want adoption?** Phase 3a (PDF export) is mechanical, demoable, and the
-  single most persuasive artifact for skeptics.
+  single most persuasive artifact for skeptics — and the display lists it
+  exports from now exist.
 - **Want a moonshot?** §10.2 (`vsd-mcp`) is genuinely small — vsd-core
   already does verified extract/diff; it needs an MCP wrapper and a README
   that explains *why agents should refuse unsigned PDFs*.

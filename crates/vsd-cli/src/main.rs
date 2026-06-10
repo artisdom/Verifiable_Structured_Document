@@ -70,7 +70,35 @@ enum Command {
         output: Option<PathBuf>,
     },
     /// Verify container integrity, document validity, and all signatures.
-    Verify { file: PathBuf },
+    Verify {
+        file: PathBuf,
+        /// Also re-run the layout engine and require the render cache to
+        /// match the content tree exactly (spec §5.2) — the check that
+        /// makes "visible pixels ≠ extracted text" detectable.
+        #[arg(long)]
+        recompute: bool,
+    },
+    /// Lay the document out with vsd-layout/1.0, attaching a verifiable
+    /// render cache and page index (produces a successor document).
+    Layout {
+        file: PathBuf,
+        #[arg(short, long)]
+        output: PathBuf,
+        /// Page size: a4 | letter.
+        #[arg(long, default_value = "a4")]
+        page_size: String,
+    },
+    /// Rasterize a page of the render cache to PNG.
+    Render {
+        file: PathBuf,
+        /// 1-based page number.
+        #[arg(long, default_value_t = 1)]
+        page: usize,
+        #[arg(short, long)]
+        output: PathBuf,
+        #[arg(long, default_value_t = 144.0)]
+        dpi: f64,
+    },
     /// Destructively redact the subtree at PATH (e.g. "2" or "1.3").
     Redact {
         file: PathBuf,
@@ -127,7 +155,18 @@ fn run() -> Result<()> {
         Command::Objects { file } => objects(&file),
         Command::Keygen { output } => keygen(&output),
         Command::Sign { file, key, output } => sign(&file, &key, output.as_deref()),
-        Command::Verify { file } => verify(&file),
+        Command::Verify { file, recompute } => verify(&file, recompute),
+        Command::Layout {
+            file,
+            output,
+            page_size,
+        } => layout(&file, &output, &page_size),
+        Command::Render {
+            file,
+            page,
+            output,
+            dpi,
+        } => render(&file, page, &output, dpi),
         Command::Redact {
             file,
             path,
@@ -334,7 +373,63 @@ fn sign(file: &Path, key: &Path, output: Option<&Path>) -> Result<()> {
     Ok(())
 }
 
-fn verify(file: &Path) -> Result<()> {
+fn layout(file: &Path, output: &Path, page_size: &str) -> Result<()> {
+    let vsd = load(file)?;
+    let opts = match page_size {
+        "a4" => vsd_layout::LayoutOptions::default(),
+        "letter" => vsd_layout::LayoutOptions::letter(),
+        other => bail!("unknown page size {other:?} (use a4 or letter)"),
+    };
+    let laid = vsd_layout::add_render_cache(&vsd.document, &opts)?;
+    let cache = laid.render_cache()?.expect("cache just added");
+    // The manifest now commits to the cache → new identity; prior
+    // signatures belong to the predecessor and are not carried over.
+    write_file(output, &laid, &[], &WriteOptions::default())?;
+    if !vsd.signatures.is_empty() {
+        eprintln!(
+            "note: {} signature(s) on the input signed the pre-layout document; sign the new file",
+            vsd.signatures.len()
+        );
+    }
+    println!(
+        "laid out {} page(s) with {}/{} → {}",
+        cache.pages.len(),
+        vsd_layout::ENGINE_NAME,
+        vsd_layout::ENGINE_VERSION,
+        output.display()
+    );
+    println!("layout-hash    : {}", hex::encode(cache.layout_hash));
+    println!(
+        "new document id: {} (predecessor: {})",
+        laid.document_id()?,
+        vsd.document_id
+    );
+    Ok(())
+}
+
+fn render(file: &Path, page: usize, output: &Path, dpi: f64) -> Result<()> {
+    let vsd = load(file)?;
+    let cache = vsd
+        .document
+        .render_cache()?
+        .context("document has no render cache (run `vsd layout` first)")?;
+    let page_id = cache
+        .pages
+        .get(page.checked_sub(1).context("pages are 1-based")?)
+        .with_context(|| format!("page {page} of {}", cache.pages.len()))?;
+    let page_obj = vsd_core::layout::Page::from_value(&vsd.document.store.get_value(page_id)?)?;
+    let png = vsd_render::render_page_png(&vsd.document, &page_obj, dpi)?;
+    std::fs::write(output, &png)?;
+    println!(
+        "rendered page {page}/{} at {dpi} dpi → {} ({} bytes)",
+        cache.pages.len(),
+        output.display(),
+        png.len()
+    );
+    Ok(())
+}
+
+fn verify(file: &Path, recompute: bool) -> Result<()> {
     // Container integrity (checksums, hashes, canonical form) is enforced
     // during load — reaching this line means the bytes are intact.
     let vsd = load(file)?;
@@ -375,6 +470,42 @@ fn verify(file: &Path) -> Result<()> {
             &hex::encode(&sig.pubkey)[..16]
         );
     }
+
+    if recompute {
+        use vsd_layout::RecomputeOutcome;
+        match vsd_layout::verify_render_cache(&vsd.document)? {
+            RecomputeOutcome::Match { pages } => {
+                println!(
+                    "recompute   : OK — {pages} page(s) re-laid out, byte-identical to the cache; \
+                     pixels and meaning agree"
+                );
+            }
+            RecomputeOutcome::NoCache => {
+                println!("recompute   : no render cache present (structure-only document)");
+            }
+            RecomputeOutcome::UnknownEngine { name, version } => {
+                all_ok = false;
+                println!(
+                    "recompute   : FAILED — cache claims engine {name}/{version}, which this \
+                     build cannot reproduce"
+                );
+            }
+            RecomputeOutcome::Mismatch {
+                expected_pages,
+                cached_pages,
+            } => {
+                all_ok = false;
+                println!(
+                    "recompute   : FAILED — the render cache LIES about the content tree \
+                     (expected {} page(s), cache has {}). What this document displays is not \
+                     what it says.",
+                    expected_pages.len(),
+                    cached_pages.len()
+                );
+            }
+        }
+    }
+
     if all_ok {
         println!("VERIFIED");
         Ok(())
