@@ -1,0 +1,39 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/vsd-core",
+    "crates/vsd-container",
+    "crates/vsd-sign",
+    "crates/vsd-cli",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.85"
+license = "Apache-2.0"
+authors = ["VSD Contributors"]
+repository = "https://github.com/vsd-format/vsd"
+keywords = ["document", "format", "verifiable", "pdf", "cbor"]
+categories = ["encoding", "parser-implementations"]
+
+[workspace.dependencies]
+vsd-core = { path = "crates/vsd-core", version = "0.1.0" }
+vsd-container = { path = "crates/vsd-container", version = "0.1.0", default-features = false }
+vsd-sign = { path = "crates/vsd-sign", version = "0.1.0" }
+
+blake3 = "1.5"
+thiserror = "2"
+zstd = "0.13"
+ed25519-dalek = { version = "2", features = ["rand_core"] }
+rand_core = { version = "0.6", features = ["getrandom"] }
+regex = "1"
+hex = "0.4"
+clap = { version = "4", features = ["derive"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+anyhow = "1"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1

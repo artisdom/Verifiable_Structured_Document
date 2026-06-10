@@ -1,0 +1,24 @@
+[package]
+name = "vsd-cli"
+description = "Command-line tool for VSD (Verifiable Structured Document): pack, validate, sign, verify, redact, extract, diff."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+keywords.workspace = true
+categories.workspace = true
+
+[[bin]]
+name = "vsd"
+path = "src/main.rs"
+
+[dependencies]
+vsd-core = { workspace = true }
+vsd-container = { workspace = true, features = ["zstd"] }
+vsd-sign = { workspace = true }
+clap = { workspace = true }
+serde_json = { workspace = true }
+anyhow = { workspace = true }
+hex = { workspace = true }

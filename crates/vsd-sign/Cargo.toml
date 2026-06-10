@@ -1,0 +1,19 @@
+[package]
+name = "vsd-sign"
+description = "Signing and verification for VSD (Verifiable Structured Document): Ed25519 signatures over Merkle roots of document meaning."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+keywords.workspace = true
+categories.workspace = true
+
+[dependencies]
+vsd-core = { workspace = true }
+vsd-container = { workspace = true }
+ed25519-dalek = { workspace = true }
+rand_core = { workspace = true }
+thiserror = { workspace = true }
+hex = { workspace = true }

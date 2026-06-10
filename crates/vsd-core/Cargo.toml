@@ -1,0 +1,17 @@
+[package]
+name = "vsd-core"
+description = "Core data model for VSD (Verifiable Structured Document): deterministic CBOR, content-addressed object store, content tree, manifest, validation, redaction."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+keywords.workspace = true
+categories.workspace = true
+
+[dependencies]
+blake3 = { workspace = true }
+thiserror = { workspace = true }
+regex = { workspace = true }
+hex = { workspace = true }

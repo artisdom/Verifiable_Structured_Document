@@ -1,0 +1,163 @@
+# VSD — Verifiable Structured Document
+
+> Layout fidelity of PDF · parseability of HTML · integrity model of Git · attack surface of a JPEG
+
+A document format in which **structure is canonical and pixels are cache**. The
+typed content tree is the document; every object is content-addressed
+(BLAKE3-256 over deterministic CBOR); the document's identity is a single
+32-byte Merkle commitment to every byte of content; and signatures cover
+*meaning*, not byte ranges — so they survive recompression, repacking,
+and container reordering.
+
+This repository is the reference implementation in Rust, tracking
+[the draft specification](vsd-spec-draft.md).
+
+## Why
+
+PDF has survived 30 years because it nails pixel-faithful, self-contained,
+offline, archivable layout. It is also a bag of draw commands with semantics
+bolted on, a scripting host, and a parser-ambiguity playground. VSD keeps the
+four properties that matter and removes the failure modes by construction:
+
+| PDF attack / failure class | VSD answer |
+|---|---|
+| Embedded JavaScript, launch actions | No executable content exists in the format |
+| Parser ambiguity, polyglot files | One deterministic CBOR grammar; strict decoding; chunk checksums |
+| Visible pixels ≠ extracted text | Render cache is a verifiable projection of the content tree |
+| Failed redaction (black box over live text) | Redaction replaces the subtree, purges objects, and proves what was removed — a black box is unrepresentable |
+| Signature shadow attacks | Signatures over Merkle roots; amendments form an explicit predecessor chain |
+| ReDoS in form validation | Total expression language, RE2-class regexes only |
+| Table extraction as a research field | Tables are tables: topology, header scope, spans are structural facts |
+| Accessibility as an afterthought | Missing alt text is a *validation error*; reading order is tree order |
+
+## Crates
+
+| Crate | Contents |
+|---|---|
+| [`vsd-core`](crates/vsd-core) | Deterministic CBOR (RFC 8949 §4.2, strict both ways) · content-addressed object store · content tree · manifest & profiles · validation · destructive redaction · forms · object-set diff · render-layer types |
+| [`vsd-container`](crates/vsd-container) | The `.vsd` chunk container: 32-byte header, BLAKE3-checksummed chunks, object index, signature blocks, trailer; zstd optional |
+| [`vsd-sign`](crates/vsd-sign) | Ed25519 signatures over document/subtree Merkle roots, with domain separation (wire format reserves `ecdsa-p256`, `ml-dsa-65`) |
+| [`vsd-cli`](crates/vsd-cli) | The `vsd` tool: `pack`, `info`, `validate`, `extract`, `objects`, `keygen`, `sign`, `verify`, `redact`, `diff` |
+
+## Quick start
+
+```console
+$ cargo install --path crates/vsd-cli
+
+# Author a document in JSON, pack it into a .vsd
+$ vsd pack examples/agreement.json -o agreement.vsd --profile form
+wrote agreement.vsd (1174 bytes, 3 objects)
+document id: 34ca96f9e12e92bc…
+
+# Sign and verify
+$ vsd keygen -o me.key
+$ vsd sign agreement.vsd --key me.key -o agreement-signed.vsd
+$ vsd verify agreement-signed.vsd
+container   : OK (all chunk checksums and object hashes verified)
+validation  : OK
+signature 0 : [document] key 9a199e3c51aa5c24… → VALID
+VERIFIED
+
+# Destructively redact the paragraph at tree path 2.2
+$ vsd redact agreement-signed.vsd --path 2.2 --reason "bank details" -o redacted.vsd
+removed-subtree proof: f1df56f6…
+purged 1 unreferenced object(s) from the store
+
+# The content is gone from every byte of the file, the document is
+# still valid, and it records its predecessor:
+$ vsd diff agreement.vsd redacted.vsd
+new declares old as its predecessor (amendment chain)
+objects: 2 shared, 1 added (+1138 B), 1 removed (-1152 B)
+changed: 2.2: paragraph → redacted
+```
+
+Text extraction is a tree walk, not OCR-adjacent heuristics:
+
+```console
+$ vsd extract agreement.vsd          # exact reading-order plain text
+$ vsd extract agreement.vsd --format json   # full content tree
+```
+
+## Library use
+
+```rust
+use vsd_core::document::DocumentBuilder;
+use vsd_core::tree::{Doc, Direction, Heading, Inline, Node, Para};
+use vsd_container::{write_document, WriteOptions};
+
+let root = Node::Doc(Doc {
+    lang: "en".into(),
+    dir: Direction::Ltr,
+    children: vec![
+        Node::Heading(Heading { level: 1, children: vec![Inline::Text("Hello".into())] }),
+        Node::Para(Para { children: vec![Inline::Text("World.".into())] }),
+    ],
+});
+let doc = DocumentBuilder::new(root).build()?;
+let id = doc.document_id()?;          // 32-byte identity over all content
+let bytes = write_document(&doc, &[], &WriteOptions::default())?;
+# Ok::<(), Box<dyn std::error::Error>>(())
+```
+
+## Format in one page
+
+```
+.vsd file = HEADER (32 B) · MNFST · INDEX · OBJS… · SIGS? · TRAILR
+```
+
+- Every chunk: `u64 length · u32 fourcc · u32 flags · payload · u64 BLAKE3-64 checksum`
+- Every object: deterministic CBOR; `object_id = BLAKE3-256(bytes)`; immutable
+- The manifest references the content-tree root, resources, metadata, render
+  cache, and provenance by object id. **Document identity = BLAKE3(manifest).**
+- Editing produces new objects and a new manifest; unchanged objects are
+  shared, so revision diffs are object-set diffs, exactly like Git trees.
+- The decoder is strict: non-minimal integers, unsorted map keys, indefinite
+  lengths, overlong floats, tags, trailing bytes, non-canonical object bytes,
+  hash mismatches, and checksum failures are all hard errors.
+
+## Conformance profiles
+
+| Profile | Constraint set |
+|---|---|
+| `core` | Baseline; render cache optional |
+| `archive` | Render cache + provenance mandatory; field layer forbidden (PDF/A analogue) |
+| `form` | Core + declarative field layer + signatures |
+| `stream` | Core + mandatory page index for ranged-HTTP access |
+
+## Status and roadmap
+
+**Implemented (v0.1):** the canonical layer end to end — deterministic
+encoding, content addressing, container I/O with full integrity verification,
+validation with accessibility as a validity condition, Ed25519 signing with
+subtree scopes and amendment chains, spec-defined destructive redaction with
+proofs, the total forms expression language, object-set diffs, text
+extraction, and the CLI.
+
+**Not yet implemented (the honest list, spec §13):**
+
+- **The reference layout engine** (`vsd-layout`) — deterministic text shaping
+  and pagination is the format's hardest problem; the render-cache types,
+  display-list format, layout-hash verification, and engine trait are in
+  place, the engine is not. Until then VSD operates "structure-only", which
+  already covers signing, redaction, archival, and machine readability.
+- A rasterizer / viewer.
+- PDF interop converters (PDF→VSD structure recovery; VSD→PDF export).
+- X.509 chains, RFC 3161 timestamps, and post-quantum (`ml-dsa-65`) signatures
+  — wire format reserves all three.
+- Streaming/ranged readers (the page-index object and chunk ordering are
+  specified and written, the lazy reader is not).
+- A public conformance test-vector suite beyond the current integration tests.
+
+## Security posture
+
+- No `unsafe` in any VSD crate.
+- No executable content in the format; forms are a total, terminating
+  expression language with RE2-class regexes (linear-time matching).
+- Hostile-input bounds: nesting depth caps, chunk size sanity caps,
+  decompression-bomb guard, expression size/depth caps.
+- Strict parsing everywhere — unknown keys, unknown node types, and
+  non-canonical encodings are rejected, eliminating polyglot ambiguity.
+
+## License
+
+Apache-2.0

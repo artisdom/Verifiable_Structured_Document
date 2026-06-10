@@ -1,0 +1,40 @@
+{
+  "lang": "en",
+  "title": "Service Agreement — Acme & Globex",
+  "authors": ["Acme Legal", "Globex Procurement"],
+  "created": "2026-06-10T09:00:00Z",
+  "keywords": ["agreement", "services"],
+  "content": [
+    { "type": "heading", "level": 1, "text": "Service Agreement" },
+    { "type": "para", "children": [
+        "This agreement is made between ",
+        { "text": "Acme Ltd", "bold": true },
+        " and ",
+        { "text": "Globex Corp", "bold": true },
+        ", effective 1 July 2026."
+    ]},
+    { "type": "section", "role": "fees", "content": [
+        { "type": "heading", "level": 2, "text": "Schedule of fees" },
+        { "type": "table",
+          "head": [["Service", "Monthly fee"]],
+          "body": [
+            ["Monitoring", "$400"],
+            ["Maintenance", "$850"],
+            ["Emergency callout", "$120/hr"]
+          ]
+        },
+        { "type": "para", "text": "Fees are payable within 20 working days of invoice. Account: 12-3456-0789-00." }
+    ]},
+    { "type": "section", "role": "terms", "content": [
+        { "type": "heading", "level": 2, "text": "Term and termination" },
+        { "type": "list", "ordered": true, "items": [
+            "The initial term is 24 months.",
+            "Either party may terminate with 90 days written notice.",
+            "Confidentiality obligations survive termination."
+        ]}
+    ]},
+    { "type": "field", "id": "po_number", "kind": "text", "label": "Purchase order",
+      "required": true,
+      "constraint": ["regex-valid", {"$": "po_number"}, "PO-[0-9]{6}"] }
+  ]
+}

@@ -1,0 +1,21 @@
+[package]
+name = "vsd-container"
+description = "Container I/O for VSD (Verifiable Structured Document): chunked .vsd file reading and writing with integrity verification."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+keywords.workspace = true
+categories.workspace = true
+
+[features]
+default = ["zstd"]
+zstd = ["dep:zstd"]
+
+[dependencies]
+vsd-core = { workspace = true }
+blake3 = { workspace = true }
+thiserror = { workspace = true }
+zstd = { workspace = true, optional = true }
