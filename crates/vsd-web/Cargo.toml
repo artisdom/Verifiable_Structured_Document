@@ -19,7 +19,14 @@ vsd-container = { workspace = true, features = ["zstd-pure"] }
 vsd-core = { workspace = true, features = ["std"] }
 vsd-layout = { workspace = true }
 vsd-render = { workspace = true }
+# Verify-only (no keygen feature): signature verification needs no RNG,
+# so it runs in the browser.
+vsd-sign = { workspace = true }
 serde_json = { workspace = true }
+
+[dev-dependencies]
+# Tests sign documents (host-only); the wasm artifact stays verify-only.
+vsd-sign = { workspace = true, features = ["keygen"] }
 
 [package.metadata.docs.rs]
 all-features = true

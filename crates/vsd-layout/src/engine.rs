@@ -410,6 +410,8 @@ impl Engine<'_> {
                 let sub = Node::from_value(&self.doc.store.get_value(id)?)?;
                 self.fragment_at(&sub, path, x, width)?
             }
+            // Salt wrappers are invisible to layout and back-references.
+            Node::Salted(s) => self.fragment_at(&s.child, path, x, width)?,
             Node::Doc(_) => {
                 return Err(LayoutError::Unsupported(
                     "nested doc nodes are not layoutable".into(),

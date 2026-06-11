@@ -49,6 +49,7 @@ pub struct VerifyingKey(ed25519_dalek::VerifyingKey);
 
 impl SigningKey {
     /// Generate from the OS CSPRNG.
+    #[cfg(feature = "keygen")]
     pub fn generate() -> SigningKey {
         let mut rng = rand_core::OsRng;
         SigningKey(ed25519_dalek::SigningKey::generate(&mut rng))
@@ -193,7 +194,7 @@ pub struct HybridSigningKey {
 }
 
 pub mod hybrid {
-    use fips204::traits::{SerDes, Signer as _, Verifier as _};
+    use fips204::traits::{SerDes, Verifier as _};
 
     pub const ED_PK_LEN: usize = 32;
     pub const ED_SIG_LEN: usize = 64;
@@ -207,10 +208,12 @@ pub mod hybrid {
     /// VSD message prefix, identically for both component algorithms.
     const ML_CTX: &[u8] = &[];
 
+    #[cfg(feature = "keygen")]
     pub(crate) fn sign_ml(
         sk: &fips204::ml_dsa_65::PrivateKey,
         msg: &[u8],
     ) -> Result<[u8; ML_SIG_LEN], String> {
+        use fips204::traits::Signer as _;
         sk.try_sign(msg, ML_CTX).map_err(|e| e.to_string())
     }
 
@@ -247,6 +250,7 @@ pub mod hybrid {
 
 impl HybridSigningKey {
     /// Generate from the OS CSPRNG.
+    #[cfg(feature = "keygen")]
     pub fn generate() -> Result<HybridSigningKey> {
         use fips204::traits::{KeyGen, SerDes};
         let mut rng = rand_core::OsRng;
@@ -300,15 +304,20 @@ impl HybridSigningKey {
         out
     }
 
+    /// (FIPS 204 hedged signing draws randomness, so hybrid *signing*
+    /// sits behind the `keygen` feature; verification never does.)
+    #[cfg(feature = "keygen")]
     pub fn sign_document(&self, doc: &Document) -> Result<Signature> {
         let target = doc.document_id()?;
         self.sign_target(SigScope::Document, target)
     }
 
+    #[cfg(feature = "keygen")]
     pub fn sign_subtree(&self, subtree: ObjectId) -> Result<Signature> {
         self.sign_target(SigScope::Subtree, subtree)
     }
 
+    #[cfg(feature = "keygen")]
     fn sign_target(&self, scope: SigScope, target: ObjectId) -> Result<Signature> {
         let msg = message(scope, &target);
         let ed_sig = self.ed.sign(&msg);

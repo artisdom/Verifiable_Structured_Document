@@ -369,6 +369,7 @@ impl TreeCtx<'_> {
                 let sub = Node::from_value(&self.doc.store.get_value(id)?)?;
                 self.walk(&sub, path)?;
             }
+            Node::Salted(s) => self.walk(&s.child, path)?,
             Node::Code(_) | Node::PageBreakHint | Node::Redacted(_) => {}
         }
 
@@ -477,6 +478,7 @@ impl Document {
                 let sub = Node::from_value(&self.store.get_value(id)?)?;
                 self.walk_fields_into(&sub, out)?;
             }
+            Node::Salted(s) => self.walk_fields_into(&s.child, out)?,
             _ => {}
         }
         Ok(())

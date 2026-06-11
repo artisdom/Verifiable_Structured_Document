@@ -323,6 +323,10 @@ fn resolve_node(doc: &Document, node: &Node, path: &[u64]) -> Option<Node> {
         Node::SubtreeRef(id) => Node::from_value(&doc.store.get_value(id).ok()?).ok()?,
         other => other.clone(),
     };
+    // Salt wrappers are invisible to paths and to structure tagging.
+    if let Node::Salted(s) = &node {
+        return resolve_node(doc, &s.child, path);
+    }
     let Some((&idx, rest)) = path.split_first() else {
         return Some(node);
     };
@@ -393,6 +397,7 @@ fn walk_alts(doc: &Document, node: &Node, out: &mut BTreeMap<VsdId, String>) -> 
             let sub = Node::from_value(&doc.store.get_value(id)?)?;
             walk_alts(doc, &sub, out)?;
         }
+        Node::Salted(s) => walk_alts(doc, &s.child, out)?,
         _ => {}
     }
     Ok(())

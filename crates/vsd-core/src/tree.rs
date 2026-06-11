@@ -10,6 +10,7 @@
 //! in this major version.
 
 use alloc::borrow::ToOwned;
+use alloc::boxed::Box;
 use alloc::format;
 use alloc::string::String;
 use alloc::vec;
@@ -37,6 +38,19 @@ pub enum Node {
     /// A subtree stored as a separate object, referenced by hash.
     /// This is what makes the tree a Merkle structure (spec §3).
     SubtreeRef(ObjectId),
+    /// A salt wrapper for selective disclosure (spec §7.3, added in
+    /// minor 0.2): random bytes mixed into the subtree's content
+    /// address so that a *hidden* sibling's hash cannot be confirmed by
+    /// hashing a guess of its content. Transparent everywhere else —
+    /// layout, extraction, and validation see only the child.
+    Salted(Salted),
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct Salted {
+    /// 16–32 random bytes, generated at sealing time.
+    pub salt: Vec<u8>,
+    pub child: Box<Node>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -391,6 +405,11 @@ impl Node {
                 .put("t", Value::text("ref"))
                 .put("ref", id.to_value())
                 .build(),
+            Node::Salted(s) => MapBuilder::new()
+                .put("t", Value::text("salted"))
+                .put("salt", Value::Bytes(s.salt.clone()))
+                .put("child", s.child.to_value()?)
+                .build(),
         })
     }
 
@@ -553,6 +572,18 @@ impl Node {
                 Ok(Node::SubtreeRef(ObjectId::from_value(req(
                     v, "ref", "ref",
                 )?)?))
+            }
+            "salted" => {
+                check_keys(v, &["t", "salt", "child"], "salted")?;
+                let salt = req(v, "salt", "salted")?
+                    .as_bytes()
+                    .filter(|b| (16..=32).contains(&b.len()))
+                    .ok_or_else(|| Error::Schema("salted: salt must be 16..=32 bytes".into()))?
+                    .to_vec();
+                Ok(Node::Salted(Salted {
+                    salt,
+                    child: alloc::boxed::Box::new(Node::from_value(req(v, "child", "salted")?)?),
+                }))
             }
             other => Err(Error::Schema(format!("unknown node type {other:?}"))),
         }

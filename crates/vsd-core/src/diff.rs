@@ -146,6 +146,7 @@ fn kind(n: &Node) -> &'static str {
         Node::PageBreakHint => "pagebreak",
         Node::Redacted(_) => "redacted",
         Node::SubtreeRef(_) => "ref",
+        Node::Salted(_) => "salted",
     }
 }
 
@@ -153,6 +154,8 @@ fn children_of(n: &Node) -> Option<Vec<Node>> {
     match n {
         Node::Doc(d) => Some(d.children.clone()),
         Node::Section(s) => Some(s.children.clone()),
+        // The salt wrapper is transparent: compare its child.
+        Node::Salted(s) => Some(vec![(*s.child).clone()]),
         _ => None,
     }
 }

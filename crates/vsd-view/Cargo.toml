@@ -1,4 +1,4 @@
-[package]
+﻿[package]
 name = "vsd-view"
 description = "Native viewer for VSD documents: page navigation, zoom, exact text search, copy, and a first-class verification banner."
 version.workspace = true
@@ -17,7 +17,7 @@ path = "src/main.rs"
 [dependencies]
 vsd-core = { workspace = true, features = ["std"] }
 vsd-container = { workspace = true, features = ["zstd"] }
-vsd-sign = { workspace = true }
+vsd-sign = { workspace = true, features = ["keygen"] }
 vsd-layout = { workspace = true }
 vsd-render = { workspace = true }
 anyhow = { workspace = true }

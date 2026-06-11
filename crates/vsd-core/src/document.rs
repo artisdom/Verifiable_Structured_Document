@@ -154,6 +154,7 @@ impl Document {
                 }
             }
             Node::SubtreeRef(id) => self.collect_node_refs(id, seen)?,
+            Node::Salted(s) => self.collect_refs_in_node(&s.child, seen)?,
             Node::Code(_) | Node::Field(_) | Node::PageBreakHint | Node::Redacted(_) => {}
         }
         Ok(())
@@ -199,6 +200,7 @@ impl Document {
                 let sub = Node::from_value(&self.store.get_value(id)?)?;
                 self.walk_fields(&sub, out)?;
             }
+            Node::Salted(s) => self.walk_fields(&s.child, out)?,
             _ => {}
         }
         Ok(())

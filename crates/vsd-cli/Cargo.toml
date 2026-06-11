@@ -1,4 +1,4 @@
-[package]
+﻿[package]
 name = "vsd-cli"
 description = "Command-line tool for VSD (Verifiable Structured Document): pack, validate, sign, verify, redact, extract, diff."
 version.workspace = true
@@ -22,11 +22,13 @@ vsd-pdf = { workspace = true }
 vsd-tlog = { workspace = true }
 pulldown-cmark = { version = "0.12", default-features = false }
 vsd-container = { workspace = true, features = ["zstd"] }
-vsd-sign = { workspace = true }
+vsd-sign = { workspace = true, features = ["keygen"] }
 clap = { workspace = true }
 serde_json = { workspace = true }
 anyhow = { workspace = true }
 hex = { workspace = true, features = ["std"] }
+getrandom = "0.2"
+tiny_http = "0.12"
 
 [dev-dependencies]
 proptest = { workspace = true }

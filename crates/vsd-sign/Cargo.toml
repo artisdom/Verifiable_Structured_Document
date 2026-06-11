@@ -10,15 +10,22 @@ repository.workspace = true
 keywords.workspace = true
 categories.workspace = true
 
+[features]
+default = ["keygen"]
+# Key generation and hybrid signing need an OS CSPRNG. Verification
+# never does — disable this feature for wasm/embedded verifiers.
+keygen = ["dep:rand_core", "ed25519-dalek/rand_core", "fips204/default-rng"]
+
 [dependencies]
 vsd-core = { workspace = true, features = ["std"] }
 vsd-container = { workspace = true }
 ed25519-dalek = { workspace = true }
-rand_core = { workspace = true }
+rand_core = { workspace = true, optional = true }
 thiserror = { workspace = true }
 hex = { workspace = true }
 # FIPS 204 ML-DSA (pure Rust) for hybrid post-quantum signatures.
-fips204 = "0.4"
+# default-features off drops the OS-RNG path (verify needs none).
+fips204 = { version = "0.4", default-features = false, features = ["ml-dsa-65"] }
 # X.509 parsing for certificate binding (5a).
 x509-cert = { version = "0.2", features = ["pem"] }
 der = "0.7"

@@ -43,8 +43,8 @@ Phase 1  Hardening & ecosystem hygiene        ███████████�
 Phase 2  The render layer (vsd-layout)        ████████████████░░░░  SHIPPED (v0.5) — minimal profile; widening (2f) + incremental (2g) open
 Phase 3  PDF interop (the adoption wedge)     ██████████████░░░░░░  SHIPPED (v0.7) — export + hybrid round-trip + md on-ramp; rich import (3b/3c) + JXL (3e) open
 Phase 4  Viewing & authoring experience       ████████████░░░░░░░░  SHIPPED (v0.8) — vsd-view, <vsd-doc> WASM viewer, compose API, diff --html, interactive fill; bindings (4c) + Pandoc (4d) open
-Phase 5  Trust infrastructure at scale        █████████████░░░░░░░  SHIPPED (v0.9) — hybrid PQ, tlog, selective disclosure, cert binding; full PKI (5a) + C2PA serialization (5c) + salting (5f) open
-Phase 6  Standardization & governance         ░░░░░░░░░░░░░░░░░░░░  next major effort
+Phase 5  Trust infrastructure at scale        █████████████████░░░  SHIPPED (v0.9→0.10) — salting (5f) + reference server (5e) now complete; full PKI (5a) + C2PA serialization (5c) open
+Phase 6  Standardization & governance         ███████████░░░░░░░░░  IN-REPO PARTS SHIPPED (v0.10) — spec consolidated, conformance program, governance docs, regulatory dossiers; external milestones (second impl, standards body) open by nature
 Moonshots                                     see §10
 ```
 
@@ -323,9 +323,11 @@ Formats win when reading them is frictionless and producing them is one line.
       over half of which is the pinned Noto Sans the layout contract
       requires. Enabled by a new pure-Rust zstd decode feature
       (`vsd-container/zstd-pure`, ruzstd) so compressed containers open in
-      browsers. CI builds it for wasm on every push. ☐ In-browser signature
-      verification (needs a getrandom-free verify path) and a text layer
-      for selection are open.
+      browsers. CI builds it for wasm on every push. **In-browser
+      signature verification shipped in v0.10**: `vsd-sign` gained a
+      `keygen` feature so verification (Ed25519 *and* hybrid PQ) is
+      RNG-free, and the badge now reports signatures verified
+      client-side. ☐ A text layer for selection remains open.
 - [◐] **4c. Authoring libraries**: the high-level Rust builder shipped
       (`vsd_core::compose::Compose` — fluent
       `.h1().para().table().section()` chains, doc-tested). ☐ Python
@@ -381,14 +383,16 @@ The features that make institutions — not individuals — switch.
       dead-simple append-only file format. CLI: `vsd tlog append | head
       [--key] | prove`. "This contract existed, in exactly this form,
       when head N was signed" — without the log ever holding content.
-- [◐] **5e. Object-store CDN protocol**: conventions specified in
+- [x] **5e. Object-store CDN protocol**: conventions specified in
       [docs/OBJECT-STORE-HTTP.md](docs/OBJECT-STORE-HTTP.md) — `/vsd/o/{id}`
       immutable-cached objects, client-side verification as the trust
       model (a lying CDN can deny service, never substitute content),
-      range-request container access, corpus-level dedup. Any static
-      host implements it today. ☐ The reference server binary remains
-      open.
-- [◐] **5f. Selective disclosure**: shipped on existing Merkle
+      range-request container access, corpus-level dedup. **Reference
+      server shipped in v0.10**: `vsd serve <dir>` indexes a corpus and
+      serves objects + containers with immutable caching; routing is
+      socket-free-testable and the test suite includes a live-socket
+      smoke check plus traversal-surface rejection.
+- [x] **5f. Selective disclosure**: shipped on existing Merkle
       mechanics, no novel crypto — `vsd seal` hoists top-level blocks
       into subtree objects; `vsd disclose --index N` emits a bundle
       (manifest + root skeleton + one subtree) in which **siblings
@@ -396,38 +400,56 @@ The features that make institutions — not individuals — switch.
       the chain up to the document id — the same id signatures and tlog
       entries commit to. Tested: sibling content provably absent from
       bundle bytes; substituted/moved/flipped subtrees all rejected.
-      ☐ **Salted subtree hashing** (so guessable siblings can't be
-      confirmed by hashing the guess) is the remaining format addition;
-      unsalted disclosure is documented as unsuitable where confirmation
-      is itself a leak.
+      **Salted hashing shipped in v0.10** (format minor 0.2): the
+      `salted` node wraps each block with 16–32 CSPRNG bytes at
+      `vsd seal --salted`, so a hidden sibling's id covers content ‖
+      salt and a guess can no longer be confirmed by hashing it — the
+      test proves the confirmation attack works unsalted and fails
+      salted. Unsalted sealing still warns.
 
 ---
 
-## 9. Phase 6 — Standardization & governance
+## 9. Phase 6 — Standardization & governance ✅ *in-repo parts shipped as v0.10*
 
 Spec §13.5: **the real moat is political, not technical.** This dies if
 proprietary.
 
-- [ ] Publish the spec under an open license (CC-BY) in a separate
-      `vsd-format/spec` repository with an issue-driven change process.
-- [ ] Spec budget discipline: < 150 pages *including* the layout engine
-      (PDF 2.0 is ~1,000).
-- [ ] Second independent implementation (encourage; the conformance vectors
-      from Phase 1 exist precisely for this). Two interoperable
-      implementations is the ISO/W3C entry ticket.
-- [ ] Standards track: incubate via W3C Community Group or ISO SC34 once two
-      implementations pass the suite.
-- [ ] Foundation/working-group governance for the format mark and the
-      conformance suite; the reference implementation stays permissive
-      (Apache-2.0).
-- [ ] **Regulatory wedge dossiers** — where PDF satisfies the law poorly and
-      VSD satisfies it by construction:
-      - EU Accessibility Act (in force 2025): accessibility is a VSD
-        *validity condition*, not a remediation industry
-      - machine-readability mandates (e-invoicing: EN 16931 alignment)
-      - AI-provenance disclosure requirements
-      - court-filing redaction rules (redaction failures are structurally
-        impossible — a sentence regulators understand immediately)
+- [x] **Spec published under CC-BY**, implementation-synced:
+      [spec/SPEC.md](spec/SPEC.md) (version 0.2) replaces the 0.1
+      concept draft (now banner-marked superseded) and specifies the
+      format *as built* — actual chunk FourCCs, the deterministic CBOR
+      profile, every manifest key including `field-layer`, the `salted`
+      node, hybrid signatures, disclosure bundles, tlog formats, the
+      string registries, and the versioning policy. ☐ The split into a
+      separate `vsd-format/spec` repository happens when a second
+      implementation team exists to co-edit it (GOVERNANCE.md table).
+- [x] **Spec budget discipline**: SPEC.md + LAYOUT-1.0.md together are
+      ~30 pages against the <150-page budget (PDF 2.0 is ~1,000).
+- [x] **Conformance program** ([spec/CONFORMANCE.md](spec/CONFORMANCE.md)):
+      operational definitions of conforming reader/writer, the
+      determinism guarantees of the corpus, and the explicit promise to
+      second implementers — *you should never need our source; where
+      you do, that's a spec bug*. Corpus grown alongside (sealed-salted
+      vector + a disclosure bundle with tamper-rejection expectations).
+      ☐ A second independent implementation is, by nature, external
+      work — the inputs it needs are now all in place.
+- [ ] Standards track: incubate via W3C Community Group or ISO SC34 once
+      two implementations pass the suite (external milestone).
+- [x] **Governance documented** ([GOVERNANCE.md](GOVERNANCE.md) +
+      [CONTRIBUTING.md](CONTRIBUTING.md) + [LICENSE](LICENSE)):
+      Apache-2.0 for code (file was overdue), CC-BY 4.0 for spec; the
+      incubation rules (spec+code+vectors land together; invariants
+      frozen; strictness is a one-way door) and the staged path to
+      shared governance and a neutral foundation.
+- [x] **Regulatory wedge dossiers** ([docs/REGULATORY.md](docs/REGULATORY.md)):
+      requirement → format-property → implementation-evidence mappings
+      for the EU Accessibility Act (validity-condition accessibility),
+      e-invoicing/EN 16931 (one artifact for humans and machines,
+      provably consistent — the guarantee ZUGFeRD's XML-in-PDF cannot
+      offer), EU AI Act provenance (assertions anchor manifest hashes),
+      court redaction rules (failed redaction unrepresentable), and
+      long-term archival (versioned engine + hybrid PQ), with a
+      suggested engagement order.
 
 ---
 
@@ -520,6 +542,7 @@ core spec before a working prototype and an adversarial review.
 | **0.7** ✅ | PDF import | Hybrid lossless recovery + pluggable heuristic recovery + Markdown on-ramp + `vsd migrate` (0.6 + 0.7 shipped together as the Phase 3 release; foreign tagged-structure import open) |
 | **0.8** ✅ | Viewing + web | `vsd-view` native viewer, `<vsd-doc>` WASM viewer, compose API, redline diff, interactive fill (Python/TS bindings moved to the 0.9 cycle) |
 | **0.9** ✅ | Trust at scale | Hybrid PQ signatures, transparency log, selective disclosure, cert binding, provenance authoring (full PKI chains + RFC 3161 + C2PA serialization carry into the 1.0 cycle) |
+| **0.10** ✅ | Standardization prep | Consolidated CC-BY spec (format 0.2: salted disclosure), conformance program, governance docs, regulatory dossiers, reference object-store server, in-browser signature verification |
 | **1.0** | Freeze | Spec 1.0, two implementations, audit complete, ISO/W3C track |
 
 *Versioning policy:* the format major version and the crate versions decouple

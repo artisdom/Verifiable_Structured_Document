@@ -23,7 +23,7 @@ use vsd_core::Document;
 pub struct Session {
     pub document: Document,
     pub pages: Vec<Page>,
-    pub signatures: usize,
+    pub signatures: Vec<vsd_container::Signature>,
     pub from_cache: bool,
 }
 
@@ -65,10 +65,26 @@ impl Session {
         };
         Ok(Session {
             pages,
-            signatures: file.signatures.len(),
+            signatures: file.signatures,
             from_cache,
             document,
         })
+    }
+
+    /// Verify every signature in the browser (Ed25519 and hybrid PQ —
+    /// verification needs no RNG). Returns (valid, total).
+    pub fn verify_signatures(&self) -> (usize, usize) {
+        let valid = self
+            .signatures
+            .iter()
+            .filter(|s| {
+                matches!(
+                    vsd_sign::verify(&self.document, s),
+                    Ok(vsd_sign::Verdict::Valid)
+                )
+            })
+            .count();
+        (valid, self.signatures.len())
     }
 
     pub fn render_png(&self, page: usize, dpi: f64) -> Result<Vec<u8>, String> {
@@ -104,13 +120,15 @@ impl Session {
             Ok(VerifyState::UnknownEngine) => "unknown-engine",
             Err(_) => "error",
         };
+        let (sigs_valid, sigs_total) = self.verify_signatures();
         serde_json::json!({
             "doc_id": self.document.document_id().map(|i| i.to_hex()).unwrap_or_default(),
             "title": meta.title,
             "pages": self.pages.len(),
             "valid": report.is_valid(),
             "warnings": report.warnings().count(),
-            "signatures": self.signatures,
+            "signatures": sigs_total,
+            "signatures_valid": sigs_valid,
             "recompute": recompute,
             "profile": self.document.manifest.profile.as_str(),
         })
@@ -289,6 +307,27 @@ mod tests {
         assert_eq!(info["pages"], 1);
         assert_eq!(info["valid"], true);
         assert_eq!(info["recompute"], "match");
+    }
+
+    #[test]
+    fn signatures_verify_without_rng_access() {
+        // Sign on the host (keygen feature, dev-dep only); the verify
+        // path used here is the same RNG-free code the wasm build ships.
+        let doc = Compose::new("en").para("signed page").finish().unwrap();
+        let ed = vsd_sign::SigningKey::from_seed(&[3u8; 32]).unwrap();
+        let hybrid = vsd_sign::HybridSigningKey::generate().unwrap();
+        let sigs = vec![
+            ed.sign_document(&doc).unwrap(),
+            hybrid.sign_document(&doc).unwrap(),
+        ];
+        let bytes =
+            vsd_container::write_document(&doc, &sigs, &WriteOptions { compress: false }).unwrap();
+
+        let session = Session::open(&bytes).unwrap();
+        assert_eq!(session.verify_signatures(), (2, 2));
+        let info: serde_json::Value = serde_json::from_str(&session.info_json()).unwrap();
+        assert_eq!(info["signatures"], 2);
+        assert_eq!(info["signatures_valid"], 2);
     }
 
     #[test]

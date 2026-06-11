@@ -1,6 +1,16 @@
 # VSD — Verifiable Structured Document
 ## Container & Format Specification — Draft 0.1
 
+> **SUPERSEDED.** This is the original 0.1 concept draft, kept for
+> history. The normative, implementation-synced specification is
+> **[spec/SPEC.md](spec/SPEC.md)** (version 0.2, CC-BY 4.0), with the
+> layout engine contract in
+> [docs/LAYOUT-1.0.md](docs/LAYOUT-1.0.md) and the conformance program
+> in [spec/CONFORMANCE.md](spec/CONFORMANCE.md). Where this draft and
+> the implementation disagree (chunk FourCC spellings, the manifest's
+> `field-layer` key, the `salted` node, hybrid signatures), SPEC.md is
+> authoritative.
+
 **Status:** Concept draft
 **Design goals:** layout fidelity of PDF · parseability of HTML · integrity model of Git · attack surface of a JPEG
 

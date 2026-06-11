@@ -82,12 +82,17 @@ class VsdDoc extends HTMLElement {
         const infoLen = api.vsd_info(handle);
         const info = JSON.parse(new TextDecoder().decode(readResult(api, infoLen)));
 
-        const state = info.valid ? info.recompute : "error";
+        const sigsBad = info.signatures > 0 && info.signatures_valid < info.signatures;
+        const state = info.valid && !sigsBad ? info.recompute : sigsBad ? "MISMATCH" : "error";
         const [fg, bg, label] = BADGES[state] ?? BADGES.error;
         badge.style.color = fg;
         badge.style.background = bg;
-        badge.textContent = `${info.valid ? "✓" : "✗"} ${label}` +
-          (info.signatures ? ` · ${info.signatures} signature(s) present` : "");
+        const sigNote = sigsBad
+          ? ` · ⚠ only ${info.signatures_valid}/${info.signatures} signature(s) verify`
+          : info.signatures
+            ? ` · ${info.signatures_valid} signature(s) verified in-browser`
+            : "";
+        badge.textContent = `${info.valid && !sigsBad ? "✓" : "✗"} ${label}${sigNote}`;
 
         const meta = document.createElement("div");
         meta.className = "meta";

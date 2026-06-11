@@ -129,6 +129,38 @@ fn gen_vectors() -> Result<()> {
         "note": "destructive redaction: the secret exists in no byte of this file (spec 7.2)",
     }));
 
+    // Sealed + disclosure vectors (spec §7.3): fixed salts keep the
+    // corpus deterministic — test vectors prove *mechanics*, privacy
+    // comes from random salts in production.
+    let mut salt_counter = 0u8;
+    let mut fixed_salts = move || {
+        salt_counter += 1;
+        [salt_counter; 16]
+    };
+    let sealed = vsd_core::disclose::seal_salted(&minimal, &mut fixed_salts)?;
+    let sealed_bytes = write_document(&sealed, &[], &WriteOptions { compress: false })?;
+    write(&valid.join("sealed-salted.vsd"), &sealed_bytes)?;
+    valid_entries.push(json!({
+        "file": "valid/sealed-salted.vsd",
+        "doc_id": sealed.document_id()?.to_hex(),
+        "predecessor": minimal.document_id()?.to_hex(),
+        "profile": "core",
+        "note": "every top-level block hoisted behind a salted SubtreeRef (deterministic salts for the corpus)",
+    }));
+
+    let bundle = vsd_core::disclose::disclose(&sealed, 0)?;
+    write(&testdata.join("valid/disclosure.vsdp"), &bundle.encode()?)?;
+    valid_entries.push(json!({
+        "file": "valid/disclosure.vsdp",
+        "kind": "disclosure-bundle",
+        "doc_id": sealed.document_id()?.to_hex(),
+        "disclosed_index": 0,
+        "disclosed_contains": "Service Agreement",
+        "hidden_siblings": 3,
+        "salted": true,
+        "note": "selective disclosure of block 0; a conforming verifier MUST accept it against doc_id and MUST reject any byte modification",
+    }));
+
     // --- Invalid vectors ----------------------------------------------------
 
     let mut bad_magic = raw.clone();

@@ -5,6 +5,7 @@
 mod author;
 mod htmldiff;
 mod markdown;
+mod serve;
 
 use std::path::{Path, PathBuf};
 
@@ -190,6 +191,10 @@ enum Command {
         file: PathBuf,
         #[arg(short, long)]
         output: PathBuf,
+        /// Wrap each block with random salt so hidden siblings cannot
+        /// be confirmed by hashing a guess of their content.
+        #[arg(long)]
+        salted: bool,
     },
     /// Produce a selective-disclosure bundle for one top-level block:
     /// proves the block belongs to the document id while siblings stay
@@ -208,6 +213,15 @@ enum Command {
         /// Document id (hex) the bundle must prove membership of.
         #[arg(long)]
         expect: Option<String>,
+    },
+    /// Serve a directory of .vsd files as a content-addressed object
+    /// store (docs/OBJECT-STORE-HTTP.md). The server is untrusted by
+    /// design — clients verify every object by hash.
+    Serve {
+        /// Directory to index (recursively) for .vsd files.
+        root: PathBuf,
+        #[arg(long, default_value = "127.0.0.1:8077")]
+        addr: String,
     },
     /// Transparency log operations (RFC 6962-style, see vsd-tlog).
     #[command(subcommand)]
@@ -324,7 +338,11 @@ fn run() -> Result<()> {
             output_dir,
             profile,
         } => migrate(&input_dir, &output_dir, &profile),
-        Command::Seal { file, output } => seal(&file, &output),
+        Command::Seal {
+            file,
+            output,
+            salted,
+        } => seal(&file, &output, salted),
         Command::Disclose {
             file,
             index,
@@ -333,6 +351,7 @@ fn run() -> Result<()> {
         Command::VerifyDisclosure { bundle, expect } => {
             verify_disclosure_cmd(&bundle, expect.as_deref())
         }
+        Command::Serve { root, addr } => serve::run(&root, &addr),
         Command::Tlog(cmd) => tlog(cmd),
         Command::Provenance(cmd) => provenance(cmd),
     }
@@ -1206,16 +1225,30 @@ fn cbor_to_json(v: &vsd_core::cbor::Value) -> serde_json::Value {
     }
 }
 
-fn seal(file: &Path, output: &Path) -> Result<()> {
+fn seal(file: &Path, output: &Path, salted: bool) -> Result<()> {
     let vsd = load(file)?;
-    let sealed = vsd_core::disclose::seal(&vsd.document)?;
+    let sealed = if salted {
+        let mut fresh_salt = || {
+            let mut salt = [0u8; 16];
+            getrandom::getrandom(&mut salt).expect("OS entropy");
+            salt
+        };
+        vsd_core::disclose::seal_salted(&vsd.document, &mut fresh_salt)?
+    } else {
+        vsd_core::disclose::seal(&vsd.document)?
+    };
     write_file(output, &sealed, &[], &WriteOptions::default())?;
     let Node::Doc(d) = sealed.root_node()? else {
         unreachable!()
     };
     println!(
-        "sealed {} top-level block(s) into subtree objects → {}",
+        "sealed {} top-level block(s) into subtree objects{} → {}",
         d.children.len(),
+        if salted {
+            " (salted: hidden siblings cannot be guess-confirmed)"
+        } else {
+            " (UNSALTED: guessable siblings can be confirmed by hash)"
+        },
         output.display()
     );
     println!(
@@ -1254,7 +1287,15 @@ fn verify_disclosure_cmd(bundle_path: &Path, expect: Option<&str>) -> Result<()>
         "PROVEN: block {} belongs to document {}",
         verified.index, verified.doc_id
     );
-    println!("hidden siblings: {}", verified.hidden_siblings);
+    println!(
+        "hidden siblings: {} ({})",
+        verified.hidden_siblings,
+        if verified.salted {
+            "salted — guesses cannot be confirmed"
+        } else {
+            "unsalted — guessable content can be confirmed"
+        }
+    );
     println!("--- disclosed content ---");
     println!("{}", htmldiff::node_plain_text(&verified.subtree));
     Ok(())

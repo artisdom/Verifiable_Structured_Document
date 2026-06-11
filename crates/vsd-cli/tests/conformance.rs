@@ -27,6 +27,32 @@ fn valid_vectors_accepted_with_expected_identity() {
     for entry in entries {
         let file = entry["file"].as_str().unwrap();
         let path = testdata().join(file);
+
+        // Disclosure bundles have their own verification discipline.
+        if entry["kind"].as_str() == Some("disclosure-bundle") {
+            let bytes = std::fs::read(&path).unwrap();
+            let bundle = vsd_core::disclose::Disclosure::decode(&bytes).unwrap();
+            let expect: vsd_core::ObjectId = entry["doc_id"].as_str().unwrap().parse().unwrap();
+            let verified = vsd_core::disclose::verify_disclosure(&bundle, Some(expect)).unwrap();
+            assert_eq!(verified.index, entry["disclosed_index"].as_u64().unwrap());
+            assert_eq!(
+                verified.hidden_siblings as u64,
+                entry["hidden_siblings"].as_u64().unwrap()
+            );
+            assert_eq!(verified.salted, entry["salted"].as_bool().unwrap());
+            // Any byte modification must be rejected.
+            for i in [0, bytes.len() / 2, bytes.len() - 1] {
+                let mut bad = bytes.clone();
+                bad[i] ^= 1;
+                let rejected = match vsd_core::disclose::Disclosure::decode(&bad) {
+                    Err(_) => true,
+                    Ok(b) => vsd_core::disclose::verify_disclosure(&b, Some(expect)).is_err(),
+                };
+                assert!(rejected, "{file}: tampered byte {i} accepted");
+            }
+            continue;
+        }
+
         let vsd = read_file(&path, &ReadOptions::default())
             .unwrap_or_else(|e| panic!("{file}: conforming reader must accept: {e}"));
 

@@ -1,4 +1,4 @@
-[package]
+﻿[package]
 name = "vsd-pdf"
 description = "PDF interop for VSD: lossless tagged-PDF export (with embedded source for verifiable round-trips) and PDF import with structure recovery."
 version.workspace = true
@@ -27,4 +27,4 @@ lopdf = "0.36"
 all-features = true
 
 [dev-dependencies]
-vsd-sign = { workspace = true }
+vsd-sign = { workspace = true, features = ["keygen"] }

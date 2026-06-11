@@ -117,6 +117,7 @@ fn walk(doc: &Document, node: &Node, out: &mut String) -> Result<()> {
             let sub = Node::from_value(&doc.store.get_value(id)?)?;
             walk(doc, &sub, out)?;
         }
+        Node::Salted(s) => walk(doc, &s.child, out)?,
         Node::PageBreakHint => {}
     }
     Ok(())

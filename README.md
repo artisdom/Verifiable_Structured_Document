@@ -9,8 +9,14 @@ typed content tree is the document; every object is content-addressed
 *meaning*, not byte ranges — so they survive recompression, repacking,
 and container reordering.
 
-This repository is the reference implementation in Rust, tracking
-[the draft specification](vsd-spec-draft.md).
+This repository is the reference implementation in Rust. The normative,
+implementation-synced specification lives in **[spec/SPEC.md](spec/SPEC.md)**
+(CC-BY 4.0), with the layout contract in
+[docs/LAYOUT-1.0.md](docs/LAYOUT-1.0.md) and the conformance program in
+[spec/CONFORMANCE.md](spec/CONFORMANCE.md). Governance:
+[GOVERNANCE.md](GOVERNANCE.md). Want to build a second implementation?
+You should never need to read this source — see the conformance
+program; where you do, that's a spec bug we want filed.
 
 ## Why
 
@@ -299,19 +305,38 @@ CLI.
   content-addressed serving any static host can implement; clients verify,
   CDNs can deny service but never substitute content.
 
-**Not yet implemented (the honest list, spec §13):**
+**Implemented (v0.10, Phase 6 — standardization prep + completed partials):**
+
+- **The spec, consolidated** ([spec/SPEC.md](spec/SPEC.md), CC-BY 4.0,
+  format version 0.2): the format as actually built, in ~30 pages against
+  the 150-page budget; conformance program, governance, contributing
+  guide, Apache-2.0 LICENSE, and [regulatory wedge
+  dossiers](docs/REGULATORY.md) (EAA, e-invoicing, AI provenance, court
+  redaction, archival).
+- **Salted selective disclosure** (`vsd seal --salted`, format 0.2): hidden
+  siblings can no longer be confirmed by hashing a guess — tested by
+  running the confirmation attack against both modes.
+- **In-browser signature verification**: `vsd-sign` verification is now
+  RNG-free (Ed25519 *and* hybrid PQ), so the `<vsd-doc>` badge reports
+  signatures verified client-side.
+- **Reference object-store server** (`vsd serve`): the
+  [OBJECT-STORE-HTTP](docs/OBJECT-STORE-HTTP.md) conventions, served;
+  untrusted by design — clients verify every object by hash.
+
+**Not yet implemented (the honest list):**
 
 - Layout engine widening (engine 1.1+): RTL/bidi, CJK, complex scripts,
   bold/italic faces, justification/hyphenation, incremental relayout.
   Engine 1.0 refuses what it cannot lay out rather than mis-rendering it.
 - Python/TypeScript authoring bindings; Pandoc/Typst backends;
-  viewer-integrated form filling; in-browser signature verification.
+  viewer-integrated form filling; a browser text-selection layer.
 - PDF/A-2b export mode; foreign tagged-PDF structure-tree import; richer
   recovery strategies (columns/tables); JPEG→JXL recompression (blocked on
   a pure-Rust JXL encoder).
-- X.509 chain-path validation to trust anchors and RFC 3161 timestamps
-  (binding shipped; chains/revocation/timestamps open); salted disclosure
-  hashing; C2PA JUMBF serialization; the object-store reference server.
+- X.509 chain-path validation, revocation, RFC 3161 timestamps; C2PA
+  JUMBF serialization.
+- External-by-nature: a second independent implementation, the standards
+  track, the security audit — see [GOVERNANCE.md](GOVERNANCE.md).
 - crates.io publication (release-ready; awaits the repository going public).
 
 ## Security posture

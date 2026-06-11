@@ -1,4 +1,4 @@
-[package]
+﻿[package]
 name = "xtask"
 description = "Developer tasks for the VSD workspace (conformance-vector generation)."
 version = "0.0.0"
@@ -10,7 +10,7 @@ license.workspace = true
 [dependencies]
 vsd-core = { workspace = true, features = ["std"] }
 vsd-container = { workspace = true, features = ["zstd"] }
-vsd-sign = { workspace = true }
+vsd-sign = { workspace = true, features = ["keygen"] }
 vsd-layout = { workspace = true }
 blake3 = { workspace = true }
 serde_json = { workspace = true }

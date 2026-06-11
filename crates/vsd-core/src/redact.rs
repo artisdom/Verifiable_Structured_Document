@@ -102,6 +102,11 @@ fn replace_at(
         *node = sub;
         return Ok(removed);
     }
+    // Salt wrappers are path-transparent; descending through one keeps
+    // the wrapper (its salt) around the modified child.
+    if let Node::Salted(s) = node {
+        return replace_at(&mut s.child, doc, full, rel, reason);
+    }
 
     let children: &mut Vec<Node> = match node {
         Node::Doc(d) => &mut d.children,

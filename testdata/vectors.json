@@ -37,21 +37,21 @@
   },
   "valid": [
     {
-      "doc_id": "81fd372ab77a19ae22a25d0aca1d1ae124a21f03bd87965663550264e14a4130",
+      "doc_id": "e53ae1e41e9374ff9d2c92424f0c3b39045b8a0a984203797934c0a076affd14",
       "file": "valid/minimal.vsd",
       "note": "smallest interesting document: heading, paragraph, table, figure",
       "objects": 4,
       "profile": "core"
     },
     {
-      "doc_id": "81fd372ab77a19ae22a25d0aca1d1ae124a21f03bd87965663550264e14a4130",
+      "doc_id": "e53ae1e41e9374ff9d2c92424f0c3b39045b8a0a984203797934c0a076affd14",
       "file": "valid/minimal-compressed.vsd",
       "note": "same document id as minimal.vsd: identity survives recompression (spec 2.4)",
       "objects": 4,
       "profile": "core"
     },
     {
-      "doc_id": "81fd372ab77a19ae22a25d0aca1d1ae124a21f03bd87965663550264e14a4130",
+      "doc_id": "e53ae1e41e9374ff9d2c92424f0c3b39045b8a0a984203797934c0a076affd14",
       "file": "valid/signed.vsd",
       "note": "one valid ed25519 document-scope signature (deterministic test key)",
       "profile": "core",
@@ -59,29 +59,46 @@
       "signer_pubkey": "197f6b23e16c8532c6abc838facd5ea789be0c76b2920334039bfa8b3d368d61"
     },
     {
-      "doc_id": "a5d2134e3b197a7a1bc3ba0cfa91db6a5dc0ca7214a85ab39a049cae8edb2bab",
+      "doc_id": "3f0115a86f67463d47329d34ae38924c59cfc3ae1e2eead894116ebaa60004eb",
       "file": "valid/form-filled.vsd",
       "note": "field layer with filled values, computed field, and constraints",
       "profile": "form"
     },
     {
-      "doc_id": "611511143af22c1d69d5a0d6bb67f527b200f8da1be02344fc9633d9273cf08a",
+      "doc_id": "371587d7ac1bf57bfd7a01049f66df99028a7a72a74d8df29f45cacc99c1e0fd",
       "file": "valid/laid-out.vsd",
       "layout_engine": "vsd-layout/1.0.0",
       "layout_hash": "d8855aa04af0521620012ab4286784a882160adc4b0a75fa63d4eb2911b75335",
       "layout_pages": 1,
       "note": "render cache from vsd-layout/1.0; recomputing layout MUST reproduce these exact page objects (LAYOUT-1.0.md)",
-      "predecessor": "81fd372ab77a19ae22a25d0aca1d1ae124a21f03bd87965663550264e14a4130",
+      "predecessor": "e53ae1e41e9374ff9d2c92424f0c3b39045b8a0a984203797934c0a076affd14",
       "profile": "core"
     },
     {
-      "doc_id": "52a60076fc838c6b1216cc4ecad6b6c3fa0a72b5807cd59316db2cc093d19533",
+      "doc_id": "2e32ffbf6af8cd67ea6ba52fc259db5bdbc1c4e5eadee4dc5f3b6863d3ba1845",
       "file": "valid/redacted.vsd",
       "must_not_contain": "TOP-SECRET-ACCOUNT-9912",
       "note": "destructive redaction: the secret exists in no byte of this file (spec 7.2)",
-      "predecessor": "2e5fedd2bc2a59c518b35f63476518afa01e13d4b270ad4af0c03468d5f0c225",
+      "predecessor": "20272a9bb92efe5854e583123530455c0a541e1721dfe872da1b5c53bdb74f27",
       "profile": "core",
       "redaction_proof": "2f276889128c255308132d88ed99a03306565d39f5d40c2d12797c5515f3108c"
+    },
+    {
+      "doc_id": "934ebfecd80ff0cdb64699edcb391a1bdef60db1990794037ea1390e573b51d5",
+      "file": "valid/sealed-salted.vsd",
+      "note": "every top-level block hoisted behind a salted SubtreeRef (deterministic salts for the corpus)",
+      "predecessor": "e53ae1e41e9374ff9d2c92424f0c3b39045b8a0a984203797934c0a076affd14",
+      "profile": "core"
+    },
+    {
+      "disclosed_contains": "Service Agreement",
+      "disclosed_index": 0,
+      "doc_id": "934ebfecd80ff0cdb64699edcb391a1bdef60db1990794037ea1390e573b51d5",
+      "file": "valid/disclosure.vsdp",
+      "hidden_siblings": 3,
+      "kind": "disclosure-bundle",
+      "note": "selective disclosure of block 0; a conforming verifier MUST accept it against doc_id and MUST reject any byte modification",
+      "salted": true
     }
   ]
 }

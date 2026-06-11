@@ -31,7 +31,26 @@ use crate::tree::Node;
 /// object behind a `SubtreeRef`, producing a successor document whose
 /// tree is explicitly Merkle-ized (sealing changes the root object and
 /// therefore the document id; the original is the `predecessor`).
+///
+/// Unsalted sealing carries the guessable-sibling caveat (module docs);
+/// prefer [`seal_salted`] when sibling confirmation matters.
 pub fn seal(doc: &Document) -> Result<Document> {
+    seal_inner(doc, None)
+}
+
+/// Like [`seal`], but each hoisted block is wrapped in a [`Salted`]
+/// node first, with salt bytes drawn from `salt_source` (16–32 bytes
+/// each, from a CSPRNG). A hidden sibling's hash can then no longer be
+/// confirmed by hashing a guess of its content — guessing now requires
+/// the salt.
+pub fn seal_salted(doc: &Document, salt_source: &mut dyn FnMut() -> [u8; 16]) -> Result<Document> {
+    seal_inner(doc, Some(salt_source))
+}
+
+fn seal_inner(
+    doc: &Document,
+    mut salt_source: Option<&mut dyn FnMut() -> [u8; 16]>,
+) -> Result<Document> {
     let root = doc.root_node()?;
     let Node::Doc(mut d) = root else {
         return Err(Error::Schema("root must be a doc node".into()));
@@ -39,7 +58,15 @@ pub fn seal(doc: &Document) -> Result<Document> {
     let mut store = doc.store.clone();
     for child in &mut d.children {
         if !matches!(child, Node::SubtreeRef(_)) {
-            let id = store.put_value(&child.to_value()?)?;
+            let block = core::mem::replace(child, Node::PageBreakHint);
+            let wrapped = match salt_source.as_deref_mut() {
+                Some(source) => Node::Salted(crate::tree::Salted {
+                    salt: source().to_vec(),
+                    child: alloc::boxed::Box::new(block),
+                }),
+                None => block,
+            };
+            let id = store.put_value(&wrapped.to_value()?)?;
             *child = Node::SubtreeRef(id);
         }
     }
@@ -149,9 +176,13 @@ pub fn disclose(doc: &Document, index: u64) -> Result<Disclosure> {
 pub struct Disclosed {
     pub doc_id: ObjectId,
     pub index: u64,
+    /// The disclosed block, with any salt wrapper already removed.
     pub subtree: Node,
     /// Number of sibling blocks that remain hidden (hashes only).
     pub hidden_siblings: usize,
+    /// Whether the disclosed block was salt-wrapped (siblings of a
+    /// salted seal cannot be confirmed by guessing).
+    pub salted: bool,
 }
 
 /// Verify the hash chain: subtree → root skeleton → manifest → doc id.
@@ -198,6 +229,10 @@ pub fn verify_disclosure(bundle: &Disclosure, expect: Option<ObjectId>) -> Resul
     };
     probe.put_verified(bundle.subtree_bytes.clone(), Some(*subtree_id))?;
     let subtree = Node::from_value(&probe.get_value(subtree_id)?)?;
+    let (subtree, salted) = match subtree {
+        Node::Salted(s) => (*s.child, true),
+        other => (other, false),
+    };
 
     let hidden = d
         .children
@@ -211,6 +246,7 @@ pub fn verify_disclosure(bundle: &Disclosure, expect: Option<ObjectId>) -> Resul
         index: bundle.index,
         subtree,
         hidden_siblings: hidden,
+        salted,
     })
 }
 
@@ -292,6 +328,65 @@ mod tests {
         let last = flipped.subtree_bytes.len() - 1;
         flipped.subtree_bytes[last] ^= 1;
         assert!(verify_disclosure(&flipped, Some(id)).is_err());
+    }
+
+    #[test]
+    fn salted_sealing_defeats_sibling_guess_confirmation() {
+        let original = doc();
+        let mut counter = 0u8;
+        let mut salts = move || {
+            counter += 1;
+            [counter; 16]
+        };
+        let sealed = seal_salted(&original, &mut salts).unwrap();
+        assert!(crate::validate::validate(&sealed).is_valid());
+
+        // Content is intact through the salt wrappers.
+        let text = crate::extract::extract_text(&sealed).unwrap();
+        assert!(text.contains("Salary: $123,456 per annum."));
+
+        // Disclose the salary; the bank-account sibling stays hidden.
+        let bundle = disclose(&sealed, 2).unwrap();
+        let verified = verify_disclosure(&bundle, Some(sealed.document_id().unwrap())).unwrap();
+        assert!(verified.salted);
+        assert!(matches!(verified.subtree, Node::Para(_)));
+
+        // THE point of salting: an attacker who guesses the hidden
+        // sibling's exact content cannot confirm the guess, because the
+        // sibling's object id covers content ‖ salt, and the salt is
+        // not in the bundle.
+        let guess = Node::Para(crate::tree::Para {
+            children: vec![crate::tree::Inline::Text(
+                "Bank account: 12-3456-7890-00.".into(),
+            )],
+        });
+        let guess_id = ObjectId::of_value(&guess.to_value().unwrap()).unwrap();
+        let root = Node::from_value(&Value::decode(&bundle.root_bytes).unwrap()).unwrap();
+        let Node::Doc(d) = root else { panic!() };
+        let sibling_ids: Vec<ObjectId> = d
+            .children
+            .iter()
+            .filter_map(|c| match c {
+                Node::SubtreeRef(id) => Some(*id),
+                _ => None,
+            })
+            .collect();
+        assert!(
+            !sibling_ids.contains(&guess_id),
+            "a correct guess of sibling content must NOT match any sibling hash"
+        );
+
+        // Contrast: with UNSALTED sealing the same guess confirms —
+        // which is exactly the documented caveat.
+        let unsalted = seal(&original).unwrap();
+        let bundle_u = disclose(&unsalted, 2).unwrap();
+        let root_u = Node::from_value(&Value::decode(&bundle_u.root_bytes).unwrap()).unwrap();
+        let Node::Doc(du) = root_u else { panic!() };
+        let confirmed = du
+            .children
+            .iter()
+            .any(|c| matches!(c, Node::SubtreeRef(id) if *id == guess_id));
+        assert!(confirmed, "unsalted guess-confirmation is the known caveat");
     }
 
     #[test]

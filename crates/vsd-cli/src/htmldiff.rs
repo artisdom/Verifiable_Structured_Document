@@ -140,6 +140,7 @@ fn children(n: &Node) -> Option<Vec<Node>> {
     match n {
         Node::Doc(d) => Some(d.children.clone()),
         Node::Section(s) => Some(s.children.clone()),
+        Node::Salted(s) => Some(vec![(*s.child).clone()]),
         _ => None,
     }
 }
@@ -244,6 +245,7 @@ fn node_text(node: &Node, doc: &Document) -> String {
             Err(_) => "[unresolvable subtree]".into(),
         },
         Node::PageBreakHint => "[page break]".into(),
+        Node::Salted(s) => node_text(&s.child, doc),
     }
 }
 
