@@ -19,7 +19,7 @@ use tiny_skia::{
 use vsd_core::document::Document;
 use vsd_core::layout::{DisplayOp, Page};
 use vsd_core::manifest::Blob;
-use vsd_layout::font::FontMetrics;
+use vsd_layout::font::{Face, FontMetrics};
 
 pub type Result<T> = std::result::Result<T, RenderError>;
 
@@ -51,16 +51,18 @@ pub fn render_page(doc: &Document, page: &Page, dpi: f64) -> Result<Pixmap> {
             DisplayOp::TextRun {
                 x,
                 y,
+                font,
                 size_pt,
                 color,
                 text,
                 ..
             } => {
-                draw_text(
+                draw_text_face(
                     &mut pixmap,
                     *x * ppm,
                     *y * ppm,
                     size_pt * dpi / 72.0,
+                    Face::from_index(*font),
                     *color,
                     text,
                 );
@@ -131,7 +133,21 @@ fn draw_text(
     color: [u8; 4],
     text: &str,
 ) {
-    let metrics = FontMetrics::get();
+    draw_text_face(pixmap, x, baseline_y, size_px, Face::Regular, color, text)
+}
+
+/// Draw a run with a specific face — glyph outlines and advances both
+/// come from the face the engine measured with.
+fn draw_text_face(
+    pixmap: &mut Pixmap,
+    x: f64,
+    baseline_y: f64,
+    size_px: f64,
+    typeface: Face,
+    color: [u8; 4],
+    text: &str,
+) {
+    let metrics = FontMetrics::face_metrics(typeface);
     let face = metrics.face();
     let scale = size_px as f32 / metrics.upem as f32;
 

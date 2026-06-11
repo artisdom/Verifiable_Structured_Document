@@ -97,11 +97,14 @@ fn gen_vectors() -> Result<()> {
         "note": "field layer with filled values, computed field, and constraints",
     }));
 
-    // Laid-out vector: the cross-platform layout determinism proof.
+    // Laid-out vectors: the cross-platform layout determinism proof.
     // vectors.json is generated on one OS and CI regenerates + diffs it
     // on another — if integer-µm layout were not platform-identical,
-    // this hash would not survive the trip.
-    let laid = vsd_layout::add_render_cache(&minimal, &vsd_layout::LayoutOptions::default())?;
+    // these hashes would not survive the trip. One vector per engine
+    // version: a conforming implementation must reproduce BOTH — old
+    // caches stay verifiable forever (LAYOUT-1.0.md / LAYOUT-1.1.md).
+    let opts_10 = vsd_layout::LayoutOptions::default().with_engine(vsd_layout::EngineVersion::V1_0);
+    let laid = vsd_layout::add_render_cache(&minimal, &opts_10)?;
     let laid_bytes = write_document(&laid, &[], &WriteOptions { compress: false })?;
     write(&valid.join("laid-out.vsd"), &laid_bytes)?;
     let cache = laid.render_cache()?.expect("cache present");
@@ -110,10 +113,26 @@ fn gen_vectors() -> Result<()> {
         "doc_id": laid.document_id()?.to_hex(),
         "predecessor": minimal.document_id()?.to_hex(),
         "profile": "core",
-        "layout_engine": format!("{}/{}", vsd_layout::ENGINE_NAME, vsd_layout::ENGINE_VERSION),
+        "layout_engine": "vsd-layout/1.0.0",
         "layout_hash": hex::encode(cache.layout_hash),
         "layout_pages": cache.pages.len(),
         "note": "render cache from vsd-layout/1.0; recomputing layout MUST reproduce these exact page objects (LAYOUT-1.0.md)",
+    }));
+
+    let styled = styled_doc()?;
+    let opts_11 = vsd_layout::LayoutOptions::default().with_engine(vsd_layout::EngineVersion::V1_1);
+    let laid_11 = vsd_layout::add_render_cache(&styled, &opts_11)?;
+    let laid_11_bytes = write_document(&laid_11, &[], &WriteOptions { compress: false })?;
+    write(&valid.join("laid-out-1.1.vsd"), &laid_11_bytes)?;
+    let cache_11 = laid_11.render_cache()?.expect("cache present");
+    valid_entries.push(json!({
+        "file": "valid/laid-out-1.1.vsd",
+        "doc_id": laid_11.document_id()?.to_hex(),
+        "profile": "core",
+        "layout_engine": "vsd-layout/1.1.0",
+        "layout_hash": hex::encode(cache_11.layout_hash),
+        "layout_pages": cache_11.pages.len(),
+        "note": "engine 1.1: bold/italic faces honored from the style table (LAYOUT-1.1.md); runs carry face indices",
     }));
 
     let (redacted, predecessor_id, proof) = redacted_doc()?;
@@ -338,6 +357,56 @@ fn body_cell(text: &str) -> Cell {
             children: vec![Inline::Text(text.into())],
         })],
     }
+}
+
+/// A document exercising every face: regular, bold, italic, bold-italic.
+fn styled_doc() -> Result<Document> {
+    use vsd_core::manifest::Style;
+    use vsd_core::tree::Span;
+
+    let style = |b: bool, i: bool| Style {
+        bold: b,
+        italic: i,
+        underline: false,
+        mono: false,
+    };
+    let span = |idx: u64, text: &str| {
+        Inline::Span(Span {
+            style: Some(idx),
+            children: vec![Inline::Text(text.into())],
+        })
+    };
+    let root = Node::Doc(Doc {
+        lang: "en".into(),
+        dir: Direction::Ltr,
+        children: vec![
+            Node::Heading(Heading {
+                level: 1,
+                children: vec![Inline::Text("Engine 1.1 faces".into())],
+            }),
+            Node::Para(Para {
+                children: vec![
+                    Inline::Text("regular ".into()),
+                    span(0, "bold"),
+                    Inline::Text(" ".into()),
+                    span(1, "italic"),
+                    Inline::Text(" ".into()),
+                    span(2, "bold-italic"),
+                    Inline::Text(" tail".into()),
+                ],
+            }),
+        ],
+    });
+    Ok(DocumentBuilder::new(root)
+        .metadata(Metadata {
+            title: Some("VSD conformance: engine 1.1 faces".into()),
+            ..Default::default()
+        })
+        .resources(ResourceTable {
+            entries: vec![],
+            styles: vec![style(true, false), style(false, true), style(true, true)],
+        })
+        .build()?)
 }
 
 fn form_doc() -> Result<Document> {

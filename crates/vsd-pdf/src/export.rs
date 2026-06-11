@@ -24,7 +24,7 @@ use vsd_core::layout::{DisplayOp, Page};
 use vsd_core::manifest::Blob;
 use vsd_core::tree::Node;
 use vsd_core::ObjectId as VsdId;
-use vsd_layout::font::{FontMetrics, FONT_BYTES};
+use vsd_layout::font::{Face, FontMetrics};
 
 use crate::write::{flate, pdf_string, ObjId, PdfWriter};
 use crate::{PdfError, Result};
@@ -66,15 +66,17 @@ pub fn export_pdf(
 
     let root = doc.root_node()?;
     let alts = collect_figure_alts(doc, &root)?;
-    let metrics = FontMetrics::get();
 
-    // --- Glyph usage across the whole document ---------------------------
-    let mut gid_to_char: BTreeMap<u16, char> = BTreeMap::new();
+    // --- Glyph usage per face across the whole document --------------------
+    let mut used: BTreeMap<Face, BTreeMap<u16, char>> = BTreeMap::new();
     for page in &pages {
         for op in &page.ops {
-            if let DisplayOp::TextRun { text, .. } = op {
+            if let DisplayOp::TextRun { font, text, .. } = op {
+                let face = Face::from_index(*font);
+                let metrics = FontMetrics::face_metrics(face);
+                let gids = used.entry(face).or_default();
                 for c in text.chars().filter(|c| !c.is_control()) {
-                    gid_to_char.entry(metrics.glyph(c).0).or_insert(c);
+                    gids.entry(metrics.glyph(c).0).or_insert(c);
                 }
             }
         }
@@ -82,8 +84,15 @@ pub fn export_pdf(
 
     let mut w = PdfWriter::new();
 
-    // --- Font objects ------------------------------------------------------
-    let font_ref = embed_font(&mut w, metrics, &gid_to_char);
+    // --- Font objects (one embedded CID font per used face) ----------------
+    let mut font_refs: BTreeMap<Face, ObjId> = BTreeMap::new();
+    for (face, gids) in &used {
+        font_refs.insert(*face, embed_font(&mut w, *face, gids));
+    }
+    let mut font_resources = String::new();
+    for (face, obj) in &font_refs {
+        let _ = write!(font_resources, "/F{} {} ", face.index(), obj.r());
+    }
 
     // --- Image XObjects (deduplicated by content address) ------------------
     let mut images: Vec<(VsdId, ObjId)> = Vec::new();
@@ -104,7 +113,7 @@ pub fn export_pdf(
     let mut page_refs = Vec::new();
     let mut page_records: Vec<Vec<McRecord>> = Vec::new();
     for (page_i, page) in pages.iter().enumerate() {
-        let (content, records) = page_content(page, metrics, &images, &alts, doc, &root);
+        let (content, records) = page_content(page, &images, &alts, doc, &root);
         let compressed = flate(content.as_bytes());
         let content_obj = w.stream("/Filter /FlateDecode", &compressed);
 
@@ -114,13 +123,13 @@ pub fn export_pdf(
         }
         let page_obj = w.add(format!(
             "<< /Type /Page /Parent {} /MediaBox [0 0 {:.3} {:.3}] /Contents {} \
-             /StructParents {} /Resources << /Font << /F1 {} >> /XObject << {} >> >> >>",
+             /StructParents {} /Resources << /Font << {} >> /XObject << {} >> >> >>",
             pages_obj.r(),
             page.width_mm * PT_PER_MM,
             page.height_mm * PT_PER_MM,
             content_obj.r(),
             page_i,
-            font_ref.r(),
+            font_resources.trim_end(),
             xobjects,
         ));
         page_refs.push(page_obj);
@@ -205,7 +214,6 @@ struct McRecord {
 
 fn page_content(
     page: &Page,
-    metrics: &FontMetrics,
     images: &[(VsdId, ObjId)],
     alts: &BTreeMap<VsdId, String>,
     doc: &Document,
@@ -234,12 +242,15 @@ fn page_content(
             DisplayOp::TextRun {
                 x,
                 y,
+                font,
                 size_pt,
                 color,
                 text,
                 node_path,
                 ..
             } => {
+                let face = Face::from_index(*font);
+                let metrics = FontMetrics::face_metrics(face);
                 let tag = struct_tag(doc, root, node_path);
                 let mut hexes = String::with_capacity(text.len() * 4);
                 for c in text.chars().filter(|c| !c.is_control()) {
@@ -247,8 +258,9 @@ fn page_content(
                 }
                 let _ = writeln!(
                     s,
-                    "/{tag} << /MCID {mcid} >> BDC {} BT /F1 {:.3} Tf {:.3} {:.3} Td <{hexes}> Tj ET EMC",
+                    "/{tag} << /MCID {mcid} >> BDC {} BT /F{} {:.3} Tf {:.3} {:.3} Td <{hexes}> Tj ET EMC",
                     rg(*color),
+                    face.index(),
                     size_pt,
                     x * PT_PER_MM,
                     h_pt - y * PT_PER_MM,
@@ -492,28 +504,39 @@ fn build_struct_tree(
 
 // --- Font embedding ---------------------------------------------------------------
 
-fn embed_font(w: &mut PdfWriter, metrics: &FontMetrics, gids: &BTreeMap<u16, char>) -> ObjId {
+fn embed_font(w: &mut PdfWriter, typeface: Face, gids: &BTreeMap<u16, char>) -> ObjId {
+    let metrics = FontMetrics::face_metrics(typeface);
     let face = metrics.face();
+    let font_bytes = typeface.bytes();
+    let font_name = typeface.name();
 
     // FontFile2: the pinned TTF, flate-compressed.
-    let compressed = flate(FONT_BYTES);
+    let compressed = flate(font_bytes);
     let font_file = w.stream(
-        &format!("/Filter /FlateDecode /Length1 {}", FONT_BYTES.len()),
+        &format!("/Filter /FlateDecode /Length1 {}", font_bytes.len()),
         &compressed,
     );
 
     let bbox = face.global_bounding_box();
+    let italic = matches!(typeface, Face::Italic | Face::BoldItalic);
     let descriptor = w.add(format!(
-        "<< /Type /FontDescriptor /FontName /NotoSans-Regular /Flags 32 \
-         /FontBBox [{} {} {} {}] /ItalicAngle 0 /Ascent {} /Descent {} \
-         /CapHeight {} /StemV 80 /FontFile2 {} >>",
+        "<< /Type /FontDescriptor /FontName /{font_name} /Flags {} \
+         /FontBBox [{} {} {} {}] /ItalicAngle {} /Ascent {} /Descent {} \
+         /CapHeight {} /StemV {} /FontFile2 {} >>",
+        if italic { 32 | 64 } else { 32 },
         bbox.x_min,
         bbox.y_min,
         bbox.x_max,
         bbox.y_max,
+        if italic { -12 } else { 0 },
         metrics.ascent_units,
         metrics.descent_units,
         face.capital_height().unwrap_or(714),
+        if matches!(typeface, Face::Bold | Face::BoldItalic) {
+            120
+        } else {
+            80
+        },
         font_file.r()
     ));
 
@@ -524,7 +547,7 @@ fn embed_font(w: &mut PdfWriter, metrics: &FontMetrics, gids: &BTreeMap<u16, cha
         let _ = write!(w_array, "{gid} [{adv}] ");
     }
     let cid_font = w.add(format!(
-        "<< /Type /Font /Subtype /CIDFontType2 /BaseFont /NotoSans-Regular \
+        "<< /Type /Font /Subtype /CIDFontType2 /BaseFont /{font_name} \
          /CIDSystemInfo << /Registry (Adobe) /Ordering (Identity) /Supplement 0 >> \
          /FontDescriptor {} /DW 600 /W [{}] /CIDToGIDMap /Identity >>",
         descriptor.r(),
@@ -553,7 +576,7 @@ fn embed_font(w: &mut PdfWriter, metrics: &FontMetrics, gids: &BTreeMap<u16, cha
     let to_unicode = w.stream("/Filter /FlateDecode", &flate(cmap.as_bytes()));
 
     w.add(format!(
-        "<< /Type /Font /Subtype /Type0 /BaseFont /NotoSans-Regular /Encoding /Identity-H \
+        "<< /Type /Font /Subtype /Type0 /BaseFont /{font_name} /Encoding /Identity-H \
          /DescendantFonts [{}] /ToUnicode {} >>",
         cid_font.r(),
         to_unicode.r()

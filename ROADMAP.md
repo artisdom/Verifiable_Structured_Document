@@ -40,7 +40,7 @@ derived; container as dumb transport. Each layer is independently verifiable.
 ```
 Phase 0  Foundations (canonical layer)        ████████████████████  SHIPPED (v0.1)
 Phase 1  Hardening & ecosystem hygiene        ███████████████████░  SHIPPED (v0.3) — crates.io publish awaits public repo
-Phase 2  The render layer (vsd-layout)        ████████████████░░░░  SHIPPED (v0.5) — minimal profile; widening (2f) + incremental (2g) open
+Phase 2  The render layer (vsd-layout)        ██████████████████░░  SHIPPED (v0.5→0.11) — engine 1.1 faces + incremental relayout (2g) done; 2f script widening (RTL/CJK/complex) remains the long tail
 Phase 3  PDF interop (the adoption wedge)     ██████████████░░░░░░  SHIPPED (v0.7) — export + hybrid round-trip + md on-ramp; rich import (3b/3c) + JXL (3e) open
 Phase 4  Viewing & authoring experience       ████████████░░░░░░░░  SHIPPED (v0.8) — vsd-view, <vsd-doc> WASM viewer, compose API, diff --html, interactive fill; bindings (4c) + Pandoc (4d) open
 Phase 5  Trust infrastructure at scale        █████████████████░░░  SHIPPED (v0.9→0.10) — salting (5f) + reference server (5e) now complete; full PKI (5a) + C2PA serialization (5c) open
@@ -223,14 +223,31 @@ forever against their pinned engine.
       Windows, regenerated and diffed on Linux in CI, recomputed by the
       test suite on all three OSes. Byte-identical page objects, proven on
       every push.
-- [ ] **2f. Widening, versioned**: RTL + bidi (1.1), CJK + vertical text
-      (1.2), complex scripts/Indic via a pinned pure-Rust shaper (1.3),
-      floats & multi-column (1.4), math layout from MathML Core (1.5),
-      justification + hyphenation (1.6), bold/italic faces. Engine 1.0
-      refuses what it cannot lay out (`dir=rtl` errors rather than
-      mis-rendering).
-- [ ] **2g. Incremental relayout** (§13.2): per-section layout fences so a
-      one-paragraph edit in a 10k-page manual doesn't re-paginate the world.
+- [◐] **2f. Widening, versioned** — the versioning machinery is now real:
+      **engine 1.1 shipped (v0.11)** with genuine bold/italic/bold-italic
+      faces (three more pinned Noto Sans binaries, hashes in
+      [docs/LAYOUT-1.1.md](docs/LAYOUT-1.1.md); real metrics, never
+      synthetic styling; baselines stay on the Regular face so vertical
+      rhythm never changes). Verification dispatches on the cache's
+      pinned version — **1.0 caches recompute byte-identically forever**,
+      proven by keeping the 1.0 golden conformance vector alongside a new
+      1.1 vector; the test suite shows the two engines produce different
+      hashes for styled content (version pinning is load-bearing). PDF
+      export embeds every used face; viewer/rasterizer draw with the face
+      the engine measured with. ☐ Still open, each gated on its own
+      pinned dependency: RTL + bidi and complex scripts (need a pinned
+      pure-Rust shaper — the next major engine effort), CJK + vertical
+      text (needs CJK fonts), floats & multi-column, MathML layout,
+      justification + hyphenation, underline/mono rendering.
+- [x] **2g. Incremental relayout** (§13.2): `LayoutSession` — a fragment
+      cache keyed by (block canonical bytes, position, width, engine
+      version, inputs fingerprint), so block fragmentation (shaping +
+      line breaking, the expensive part) is reused and pagination (cheap)
+      re-runs. A one-paragraph edit in a 120-paragraph document re-shapes
+      **exactly one** fragment (asserted), and the output is byte-identical
+      to a from-scratch layout (asserted) — the determinism contract is
+      untouched because the cache is an optimization, never an oracle.
+      ☐ Cross-process cache persistence is a possible follow-up.
 
 **Exit criteria — met for the minimal profile:** two machines, two OSes, one
 document → bit-identical render cache (CI-enforced via the golden vector);
@@ -543,6 +560,7 @@ core spec before a working prototype and an adversarial review.
 | **0.8** ✅ | Viewing + web | `vsd-view` native viewer, `<vsd-doc>` WASM viewer, compose API, redline diff, interactive fill (Python/TS bindings moved to the 0.9 cycle) |
 | **0.9** ✅ | Trust at scale | Hybrid PQ signatures, transparency log, selective disclosure, cert binding, provenance authoring (full PKI chains + RFC 3161 + C2PA serialization carry into the 1.0 cycle) |
 | **0.10** ✅ | Standardization prep | Consolidated CC-BY spec (format 0.2: salted disclosure), conformance program, governance docs, regulatory dossiers, reference object-store server, in-browser signature verification |
+| **0.11** ✅ | Engine 1.1 + incremental | Bold/italic/bold-italic faces (versioned contract, 1.0 caches verify forever), `LayoutSession` incremental relayout (one edit = one re-shape, byte-identical output) |
 | **1.0** | Freeze | Spec 1.0, two implementations, audit complete, ISO/W3C track |
 
 *Versioning policy:* the format major version and the crate versions decouple

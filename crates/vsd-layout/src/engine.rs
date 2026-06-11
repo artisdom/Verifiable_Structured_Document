@@ -11,7 +11,7 @@ use vsd_core::layout::{Color, DisplayOp, Page};
 use vsd_core::manifest::Blob;
 use vsd_core::tree::{Node, Row, Table};
 
-use crate::font::{muldiv, FontMetrics};
+use crate::font::{muldiv, Face, FontMetrics};
 use crate::text::{break_lines, layout_text, measure_code_line, LayoutText};
 use crate::{LayoutError, Result};
 
@@ -37,10 +37,43 @@ const LINK_BLUE: Color = [0x1a, 0x0d, 0xab, 0xff];
 const HEADER_BG: Color = [0xf0, 0xf0, 0xf0, 0xff];
 
 /// Page geometry in µm. Default A4.
+/// Which normative contract to lay out under. Documents pin the
+/// version in their render cache; old caches stay verifiable forever.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum EngineVersion {
+    /// LAYOUT-1.0.md — single face; style spans affect nothing.
+    V1_0,
+    /// LAYOUT-1.1.md — bold/italic/bold-italic faces honored from the
+    /// style table; everything else identical to 1.0.
+    V1_1,
+}
+
+impl EngineVersion {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            EngineVersion::V1_0 => "1.0.0",
+            EngineVersion::V1_1 => "1.1.0",
+        }
+    }
+
+    pub fn parse(s: &str) -> Option<EngineVersion> {
+        match s {
+            "1.0.0" => Some(EngineVersion::V1_0),
+            "1.1.0" => Some(EngineVersion::V1_1),
+            _ => None,
+        }
+    }
+
+    fn honor_styles(self) -> bool {
+        self != EngineVersion::V1_0
+    }
+}
+
 #[derive(Clone, Copy, Debug)]
 pub struct LayoutOptions {
     pub page_width_um: i64,
     pub page_height_um: i64,
+    pub engine: EngineVersion,
 }
 
 impl Default for LayoutOptions {
@@ -48,6 +81,7 @@ impl Default for LayoutOptions {
         LayoutOptions {
             page_width_um: 210_000,
             page_height_um: 297_000,
+            engine: EngineVersion::V1_1,
         }
     }
 }
@@ -57,7 +91,13 @@ impl LayoutOptions {
         LayoutOptions {
             page_width_um: 215_900,
             page_height_um: 279_400,
+            ..Default::default()
         }
+    }
+
+    pub fn with_engine(mut self, engine: EngineVersion) -> Self {
+        self.engine = engine;
+        self
     }
 }
 
@@ -69,6 +109,7 @@ enum Op {
         x: i64,
         baseline: i64, // relative to atom top
         size_um: i64,
+        face: Face,
         color: Color,
         text: String,
         path: Vec<u64>,
@@ -99,6 +140,7 @@ impl Op {
                 x,
                 baseline,
                 size_um,
+                face,
                 color,
                 text,
                 path,
@@ -106,7 +148,7 @@ impl Op {
             } => DisplayOp::TextRun {
                 x: mm(x),
                 y: mm(y_off + baseline),
-                font: 0,
+                font: face.index(),
                 size_pt: pt(size_um),
                 color,
                 text,
@@ -133,6 +175,7 @@ impl Op {
 
 /// An indivisible vertical slice of a block (a text line, a table row,
 /// a figure, a spacer).
+#[derive(Clone)]
 struct Atom {
     ops: Vec<Op>,
     height: i64,
@@ -148,6 +191,7 @@ impl Atom {
 }
 
 /// One block, fragmented into atoms plus spacing semantics.
+#[derive(Clone)]
 struct Frag {
     space_before: i64,
     space_after: i64,
@@ -184,6 +228,32 @@ impl Frag {
     }
 }
 
+// --- Incremental relayout (ROADMAP 2g) ---------------------------------------
+
+/// A fragment cache reusable across layouts — the "per-section layout
+/// fence": block fragmentation (text shaping, line breaking — the
+/// expensive part) is a pure function of the block's canonical bytes
+/// plus the layout inputs, so unchanged blocks are reused and a
+/// one-paragraph edit re-shapes one paragraph, not the world.
+/// Pagination (cheap) always re-runs, so the output is **byte-identical
+/// to a from-scratch layout** — guaranteed by test, required by the
+/// determinism contract.
+#[derive(Default)]
+pub struct LayoutSession {
+    cache: std::collections::HashMap<CacheKey, Frag>,
+    /// Reuse statistics for the most recent layout.
+    pub hits: usize,
+    pub misses: usize,
+}
+
+impl LayoutSession {
+    pub fn new() -> LayoutSession {
+        LayoutSession::default()
+    }
+}
+
+type CacheKey = ([u8; 32], i64, i64, EngineVersion);
+
 // --- Engine ------------------------------------------------------------------
 
 pub(crate) struct Engine<'a> {
@@ -191,6 +261,11 @@ pub(crate) struct Engine<'a> {
     font: &'static FontMetrics,
     opts: LayoutOptions,
     env: BTreeMap<String, FieldValue>,
+    styles: Vec<vsd_core::manifest::Style>,
+    /// Fingerprint of layout inputs beyond the block itself (field
+    /// environment + style table) — part of every cache key.
+    inputs_fp: [u8; 32],
+    session: Option<&'a mut LayoutSession>,
     pages: Vec<Page>,
     cur: Vec<DisplayOp>,
     y: i64,
@@ -199,13 +274,23 @@ pub(crate) struct Engine<'a> {
 }
 
 pub fn layout_document(doc: &Document, opts: &LayoutOptions) -> Result<Vec<Page>> {
+    layout_document_with_session(doc, opts, None)
+}
+
+/// Layout with a reusable [`LayoutSession`] fragment cache (2g). The
+/// result is identical to [`layout_document`]; only the work differs.
+pub fn layout_document_with_session(
+    doc: &Document,
+    opts: &LayoutOptions,
+    mut session: Option<&mut LayoutSession>,
+) -> Result<Vec<Page>> {
     let root = doc.root_node()?;
     let Node::Doc(d) = &root else {
         return Err(LayoutError::Unsupported("root must be a doc node".into()));
     };
     if d.dir != vsd_core::tree::Direction::Ltr {
         return Err(LayoutError::Unsupported(
-            "vsd-layout/1.0 supports dir=ltr only (rtl arrives in a later engine version)".into(),
+            "vsd-layout supports dir=ltr only (rtl arrives in a later engine version)".into(),
         ));
     }
 
@@ -216,12 +301,39 @@ pub fn layout_document(doc: &Document, opts: &LayoutOptions) -> Result<Vec<Page>
         None => BTreeMap::new(),
     };
     let env = vsd_core::forms::evaluate_computed(&fields, &inputs)?;
+    let styles = doc.resources()?.styles;
 
+    // Inputs fingerprint: anything besides the block bytes that can
+    // change fragmentation must invalidate cache entries.
+    let mut fp = blake3::Hasher::new();
+    for (k, v) in &env {
+        fp.update(k.as_bytes());
+        fp.update(&[0]);
+        fp.update(v.to_text().as_bytes());
+        fp.update(&[1]);
+    }
+    for s in &styles {
+        fp.update(&[
+            s.bold as u8,
+            s.italic as u8,
+            s.underline as u8,
+            s.mono as u8,
+        ]);
+    }
+    let inputs_fp = *fp.finalize().as_bytes();
+
+    if let Some(s) = session.as_deref_mut() {
+        s.hits = 0;
+        s.misses = 0;
+    }
     let mut eng = Engine {
         doc,
         font: FontMetrics::get(),
         opts: *opts,
         env,
+        styles,
+        inputs_fp,
+        session: session.map(|s| &mut *s),
         pages: Vec::new(),
         cur: Vec::new(),
         y: MARGIN,
@@ -275,24 +387,64 @@ impl Engine<'_> {
             // Sections flow transparently in the page stream (their
             // children are top-level blocks); everything else fragments.
             match block {
-                Node::Section(s) => self.flow_blocks(&s.children, path)?,
+                Node::Section(s) => {
+                    let children = s.children.clone();
+                    self.flow_blocks(&children, path)?
+                }
                 Node::SubtreeRef(id) => {
                     let sub = Node::from_value(&self.doc.store.get_value(id)?)?;
                     if let Node::Section(s) = &sub {
                         self.flow_blocks(&s.children, path)?;
                     } else {
-                        let frag = self.fragment(&sub, path)?;
+                        let frag = self.fragment_cached(&sub, path)?;
                         self.place(frag);
                     }
                 }
                 other => {
-                    let frag = self.fragment(other, path)?;
+                    let frag = self.fragment_cached(other, path)?;
                     self.place(frag);
                 }
             }
             path.pop();
         }
         Ok(())
+    }
+
+    /// Fragment a top-level block, consulting the session's fragment
+    /// cache (ROADMAP 2g). The key covers everything fragmentation
+    /// depends on: the block's canonical bytes, position/width, engine
+    /// version, and the inputs fingerprint (field env + style table) —
+    /// so a hit is *provably* the identical result. node paths inside
+    /// ops are part of the block's output, so the key also covers the
+    /// path.
+    fn fragment_cached(&mut self, node: &Node, path: &[u64]) -> Result<Frag> {
+        let Some(_) = self.session else {
+            return self.fragment(node, path);
+        };
+        let mut hasher = blake3::Hasher::new();
+        hasher.update(&node.to_value()?.encode()?);
+        hasher.update(&self.inputs_fp);
+        for p in path {
+            hasher.update(&p.to_le_bytes());
+        }
+        let key: CacheKey = (
+            *hasher.finalize().as_bytes(),
+            MARGIN,
+            self.content_width(),
+            self.opts.engine,
+        );
+        if let Some(session) = self.session.as_deref_mut() {
+            if let Some(frag) = session.cache.get(&key) {
+                session.hits += 1;
+                return Ok(frag.clone());
+            }
+        }
+        let frag = self.fragment(node, path)?;
+        if let Some(session) = self.session.as_deref_mut() {
+            session.misses += 1;
+            session.cache.insert(key, frag.clone());
+        }
+        Ok(frag)
     }
 
     /// Place a fragmented block into the page flow (LAYOUT-1.0.md §8).
@@ -342,14 +494,19 @@ impl Engine<'_> {
         self.fragment_at(node, path, MARGIN, self.content_width())
     }
 
+    /// Layout text with this engine version's style policy.
+    fn styled_text(&self, inlines: &[vsd_core::tree::Inline]) -> crate::text::LayoutText {
+        layout_text(inlines, &self.styles, self.opts.engine.honor_styles())
+    }
+
     fn fragment_at(&self, node: &Node, path: &[u64], x: i64, width: i64) -> Result<Frag> {
         Ok(match node {
             Node::Para(p) => {
-                let lt = layout_text(&p.children);
+                let lt = self.styled_text(&p.children);
                 Frag::block(self.text_atoms(&lt, SIZE_BODY, x, width, path))
             }
             Node::Heading(h) => {
-                let lt = layout_text(&h.children);
+                let lt = self.styled_text(&h.children);
                 let size = SIZE_H[(h.level - 1) as usize];
                 let mut frag = Frag::block(self.text_atoms(&lt, size, x, width, path));
                 frag.space_before = if h.level == 1 {
@@ -370,7 +527,7 @@ impl Engine<'_> {
             Node::Figure(f) => {
                 let mut atoms = vec![self.image_atom(f.res, x, width)?];
                 if !f.caption.is_empty() {
-                    let lt = layout_text(&f.caption);
+                    let lt = self.styled_text(&f.caption);
                     let mut caption = self.text_atoms(&lt, SIZE_CAPTION, x, width, path);
                     if let Some(first) = caption.first_mut() {
                         for op in &mut first.ops {
@@ -420,7 +577,9 @@ impl Engine<'_> {
         })
     }
 
-    /// Text block → one atom per line, runs split at link boundaries.
+    /// Text block → one atom per line, runs split at link and face
+    /// boundaries. Baseline metrics always come from the Regular face
+    /// (LAYOUT-1.1.md: faces change advances, never vertical rhythm).
     fn text_atoms(
         &self,
         lt: &LayoutText,
@@ -431,21 +590,22 @@ impl Engine<'_> {
     ) -> Vec<Atom> {
         let line_h = FontMetrics::line_height_um(size_um);
         let ascent = self.font.ascent_um(size_um);
-        let lines = break_lines(self.font, &lt.text, size_um, width.max(1));
+        let lines = break_lines(lt, size_um, width.max(1));
         lines
             .iter()
             .map(|line| {
                 let mut ops = Vec::new();
-                for (s, e, is_link) in segment_line(line.start, line.end, &lt.links) {
+                for (s, e, is_link, face) in segment_line(line.start, line.end, lt) {
                     let text = &lt.text[s..e];
                     if text.is_empty() {
                         continue;
                     }
-                    let x = x_left + self.font.text_width_um(&lt.text[line.start..s], size_um);
+                    let x = x_left + lt.width_um(line.start, s, size_um);
                     ops.push(Op::Text {
                         x,
                         baseline: ascent,
                         size_um,
+                        face,
                         color: if is_link { LINK_BLUE } else { BLACK },
                         text: text.to_owned(),
                         path: path.to_vec(),
@@ -476,6 +636,7 @@ impl Engine<'_> {
                     x: x_left + seg_x,
                     baseline: ascent,
                     size_um: size,
+                    face: Face::Regular,
                     color: BLACK,
                     text: line[s..e].to_owned(),
                     path: path.to_vec(),
@@ -545,6 +706,7 @@ impl Engine<'_> {
                 x,
                 baseline: self.font.ascent_um(SIZE_BODY),
                 size_um: SIZE_BODY,
+                face: Face::Regular,
                 color: BLACK,
                 text: label,
                 path: path.to_vec(),
@@ -704,6 +866,7 @@ fn offset_op(op: Op, dy: i64) -> Op {
             x,
             baseline,
             size_um,
+            face,
             color,
             text,
             path,
@@ -712,6 +875,7 @@ fn offset_op(op: Op, dy: i64) -> Op {
             x,
             baseline: baseline + dy,
             size_um,
+            face,
             color,
             text,
             path,
@@ -734,16 +898,23 @@ fn offset_op(op: Op, dy: i64) -> Op {
     }
 }
 
-/// Split a line's byte range into (start, end, is_link) segments.
-fn segment_line(start: usize, end: usize, links: &[(usize, usize)]) -> Vec<(usize, usize, bool)> {
+/// Split a line's byte range into (start, end, is_link, face) segments
+/// at every link and face boundary.
+fn segment_line(start: usize, end: usize, lt: &LayoutText) -> Vec<(usize, usize, bool, Face)> {
     let mut bounds = vec![start, end];
-    for &(s, e) in links {
+    let push_range = |s: usize, e: usize, bounds: &mut Vec<usize>| {
         if s > start && s < end {
             bounds.push(s);
         }
         if e > start && e < end {
             bounds.push(e);
         }
+    };
+    for &(s, e) in &lt.links {
+        push_range(s, e, &mut bounds);
+    }
+    for &(s, e, _) in &lt.faces {
+        push_range(s, e, &mut bounds);
     }
     bounds.sort_unstable();
     bounds.dedup();
@@ -751,8 +922,8 @@ fn segment_line(start: usize, end: usize, links: &[(usize, usize)]) -> Vec<(usiz
         .windows(2)
         .map(|w| {
             let (s, e) = (w[0], w[1]);
-            let is_link = links.iter().any(|&(ls, le)| s >= ls && e <= le);
-            (s, e, is_link)
+            let is_link = lt.links.iter().any(|&(ls, le)| s >= ls && e <= le);
+            (s, e, is_link, lt.face_at(s))
         })
         .collect()
 }
@@ -791,6 +962,7 @@ impl Engine<'_> {
             x,
             baseline: ascent,
             size_um: size,
+            face: Face::Regular,
             color: BLACK,
             text: label,
             path: path.to_vec(),
@@ -810,6 +982,7 @@ impl Engine<'_> {
                 x: x + label_w,
                 baseline: ascent,
                 size_um: size,
+                face: Face::Regular,
                 color: BLACK,
                 text: value.to_text(),
                 path: path.to_vec(),
@@ -840,8 +1013,22 @@ mod tests {
 
     #[test]
     fn segment_line_splits_on_links() {
-        let segs = segment_line(0, 10, &[(2, 5)]);
-        assert_eq!(segs, vec![(0, 2, false), (2, 5, true), (5, 10, false)]);
+        let lt = LayoutText {
+            text: "0123456789".into(),
+            links: vec![(2, 5)],
+            faces: vec![(7, 9, Face::Bold)],
+        };
+        let segs = segment_line(0, 10, &lt);
+        assert_eq!(
+            segs,
+            vec![
+                (0, 2, false, Face::Regular),
+                (2, 5, true, Face::Regular),
+                (5, 7, false, Face::Regular),
+                (7, 9, false, Face::Bold),
+                (9, 10, false, Face::Regular),
+            ]
+        );
     }
 
     #[test]

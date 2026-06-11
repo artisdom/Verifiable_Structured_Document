@@ -77,10 +77,11 @@ pub struct Highlight {
     pub h_mm: f64,
 }
 
-/// Width of `text` at `size_pt` in millimetres, using the engine font
-/// (informative geometry for UI chrome; the normative layout is µm).
-pub fn text_width_mm(text: &str, size_pt: f64) -> f64 {
-    let m = FontMetrics::get();
+/// Width of `text` at `size_pt` in millimetres, using the engine face
+/// the run was measured with (informative geometry for UI chrome; the
+/// normative layout is µm).
+pub fn text_width_mm(text: &str, size_pt: f64, face: vsd_layout::font::Face) -> f64 {
+    let m = FontMetrics::face_metrics(face);
     let units: i64 = text
         .chars()
         .filter(|c| !c.is_control())
@@ -102,6 +103,7 @@ pub fn page_highlights(page: &Page, query: &str) -> Vec<Highlight> {
         let DisplayOp::TextRun {
             x,
             y,
+            font,
             size_pt,
             text,
             ..
@@ -109,6 +111,7 @@ pub fn page_highlights(page: &Page, query: &str) -> Vec<Highlight> {
         else {
             continue;
         };
+        let face = vsd_layout::font::Face::from_index(*font);
         let hay = text.to_lowercase();
         let mut from = 0usize;
         while let Some(pos) = hay[from..].find(&needle) {
@@ -120,9 +123,9 @@ pub fn page_highlights(page: &Page, query: &str) -> Vec<Highlight> {
                 let ascent_mm = m.ascent_units as f64 * size_pt / m.upem as f64 * PT_TO_MM;
                 let descent_mm = -m.descent_units as f64 * size_pt / m.upem as f64 * PT_TO_MM;
                 out.push(Highlight {
-                    x_mm: x + text_width_mm(&text[..start], *size_pt),
+                    x_mm: x + text_width_mm(&text[..start], *size_pt, face),
                     y_mm: y - ascent_mm,
-                    w_mm: text_width_mm(&text[start..end], *size_pt),
+                    w_mm: text_width_mm(&text[start..end], *size_pt, face),
                     h_mm: ascent_mm + descent_mm,
                 });
             }

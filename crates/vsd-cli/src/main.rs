@@ -93,8 +93,8 @@ enum Command {
         #[arg(long)]
         recompute: bool,
     },
-    /// Lay the document out with vsd-layout/1.0, attaching a verifiable
-    /// render cache and page index (produces a successor document).
+    /// Lay the document out with the reference engine, attaching a
+    /// verifiable render cache and page index (successor document).
     Layout {
         file: PathBuf,
         #[arg(short, long)]
@@ -102,6 +102,10 @@ enum Command {
         /// Page size: a4 | letter.
         #[arg(long, default_value = "a4")]
         page_size: String,
+        /// Engine contract version: 1.1 (bold/italic faces) or 1.0.
+        /// Old caches stay verifiable forever either way.
+        #[arg(long, default_value = "1.1.0")]
+        engine: String,
     },
     /// Rasterize a page of the render cache to PNG.
     Render {
@@ -305,7 +309,8 @@ fn run() -> Result<()> {
             file,
             output,
             page_size,
-        } => layout(&file, &output, &page_size),
+            engine,
+        } => layout(&file, &output, &page_size, &engine),
         Command::Render {
             file,
             page,
@@ -600,13 +605,17 @@ fn sign(file: &Path, key: &Path, output: Option<&Path>, cert: Option<&Path>) -> 
     Ok(())
 }
 
-fn layout(file: &Path, output: &Path, page_size: &str) -> Result<()> {
+fn layout(file: &Path, output: &Path, page_size: &str, engine: &str) -> Result<()> {
     let vsd = load(file)?;
-    let opts = match page_size {
+    let mut opts = match page_size {
         "a4" => vsd_layout::LayoutOptions::default(),
         "letter" => vsd_layout::LayoutOptions::letter(),
         other => bail!("unknown page size {other:?} (use a4 or letter)"),
     };
+    let version = vsd_layout::EngineVersion::parse(engine)
+        .or_else(|| vsd_layout::EngineVersion::parse(&format!("{engine}.0")))
+        .with_context(|| format!("unknown engine version {engine:?} (use 1.0 or 1.1)"))?;
+    opts = opts.with_engine(version);
     let laid = vsd_layout::add_render_cache(&vsd.document, &opts)?;
     let cache = laid.render_cache()?.expect("cache just added");
     // The manifest now commits to the cache → new identity; prior
@@ -622,7 +631,7 @@ fn layout(file: &Path, output: &Path, page_size: &str) -> Result<()> {
         "laid out {} page(s) with {}/{} → {}",
         cache.pages.len(),
         vsd_layout::ENGINE_NAME,
-        vsd_layout::ENGINE_VERSION,
+        version.as_str(),
         output.display()
     );
     println!("layout-hash    : {}", hex::encode(cache.layout_hash));

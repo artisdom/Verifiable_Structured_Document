@@ -323,11 +323,23 @@ CLI.
   [OBJECT-STORE-HTTP](docs/OBJECT-STORE-HTTP.md) conventions, served;
   untrusted by design — clients verify every object by hash.
 
+**Implemented (v0.11 — engine 1.1 + incremental relayout):**
+
+- **Engine 1.1: real bold/italic/bold-italic faces** (three more pinned
+  Noto Sans binaries, contract in [docs/LAYOUT-1.1.md](docs/LAYOUT-1.1.md)).
+  Verification dispatches on the version a cache pins — 1.0 caches
+  recompute byte-identically forever, with golden conformance vectors for
+  both versions. PDF export embeds every used face.
+- **Incremental relayout** (`LayoutSession`): a one-paragraph edit
+  re-shapes exactly one fragment, and the output is byte-identical to a
+  from-scratch layout — the cache is an optimization, never an oracle.
+
 **Not yet implemented (the honest list):**
 
-- Layout engine widening (engine 1.1+): RTL/bidi, CJK, complex scripts,
-  bold/italic faces, justification/hyphenation, incremental relayout.
-  Engine 1.0 refuses what it cannot lay out rather than mis-rendering it.
+- Layout engine widening (engine 1.2+): RTL/bidi and complex scripts
+  (need a pinned pure-Rust shaper — the next major engine effort), CJK,
+  justification/hyphenation, underline/mono rendering. The engine refuses
+  what it cannot lay out rather than mis-rendering it.
 - Python/TypeScript authoring bindings; Pandoc/Typst backends;
   viewer-integrated form filling; a browser text-selection layer.
 - PDF/A-2b export mode; foreign tagged-PDF structure-tree import; richer

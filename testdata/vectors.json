@@ -75,6 +75,15 @@
       "profile": "core"
     },
     {
+      "doc_id": "195a496af1a5ac207ba241f0465bbc6462f86902314be88be90d628bd16ee331",
+      "file": "valid/laid-out-1.1.vsd",
+      "layout_engine": "vsd-layout/1.1.0",
+      "layout_hash": "cdde447a16578e794667d163c063905662a819a546cd5ba9914a8a0135c380ad",
+      "layout_pages": 1,
+      "note": "engine 1.1: bold/italic faces honored from the style table (LAYOUT-1.1.md); runs carry face indices",
+      "profile": "core"
+    },
+    {
       "doc_id": "2e32ffbf6af8cd67ea6ba52fc259db5bdbc1c4e5eadee4dc5f3b6863d3ba1845",
       "file": "valid/redacted.vsd",
       "must_not_contain": "TOP-SECRET-ACCOUNT-9912",

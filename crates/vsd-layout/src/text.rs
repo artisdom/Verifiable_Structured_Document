@@ -1,24 +1,64 @@
-//! Text preparation (LAYOUT-1.0.md §4) and line breaking (§5).
+//! Text preparation (LAYOUT-1.0.md §4) and line breaking (§5), face
+//! attribution added by engine 1.1 (LAYOUT-1.1.md).
 
+use vsd_core::manifest::Style;
 use vsd_core::tree::Inline;
 
-use crate::font::FontMetrics;
+use crate::font::{Face, FontMetrics};
 
-/// A block's layout text plus link attribution ranges (byte ranges into
-/// the layout text that carry link color).
+/// A block's layout text plus attribution ranges (byte ranges into the
+/// layout text): links carry link color; face ranges carry non-regular
+/// faces (always empty under engine 1.0).
 pub struct LayoutText {
     pub text: String,
     pub links: Vec<(usize, usize)>,
+    pub faces: Vec<(usize, usize, Face)>,
+}
+
+impl LayoutText {
+    /// Face at a byte position (Regular outside any range).
+    pub fn face_at(&self, byte: usize) -> Face {
+        self.faces
+            .iter()
+            .find(|(s, e, _)| (*s..*e).contains(&byte))
+            .map(|(_, _, f)| *f)
+            .unwrap_or(Face::Regular)
+    }
+
+    /// Exact width of `text[start..end]` in µm: integer sum of scaled
+    /// advances, each char measured in its attributed face.
+    pub fn width_um(&self, start: usize, end: usize, size_um: i64) -> i64 {
+        self.text[start..end]
+            .char_indices()
+            .filter(|(_, c)| !c.is_control())
+            .map(|(off, c)| {
+                FontMetrics::face_metrics(self.face_at(start + off)).char_advance_um(c, size_um)
+            })
+            .sum()
+    }
 }
 
 /// Derive the layout text of inline content: concatenate in tree order,
 /// collapse whitespace runs to a single space, strip leading/trailing.
-pub fn layout_text(inlines: &[Inline]) -> LayoutText {
+/// `styles` is the document's style table; pass `honor_styles = false`
+/// for engine 1.0 (face ranges stay empty and output is byte-identical
+/// to the 1.0 contract).
+pub fn layout_text(inlines: &[Inline], styles: &[Style], honor_styles: bool) -> LayoutText {
     let mut raw = String::new();
     let mut links = Vec::new();
-    collect(inlines, false, &mut raw, &mut links);
+    let mut faces = Vec::new();
+    collect(
+        inlines,
+        false,
+        (false, false),
+        styles,
+        honor_styles,
+        &mut raw,
+        &mut links,
+        &mut faces,
+    );
 
-    // Collapse whitespace, remapping link ranges as we go.
+    // Collapse whitespace, remapping attribution ranges as we go.
     let mut text = String::with_capacity(raw.len());
     let mut map = vec![0usize; raw.len() + 1]; // raw byte pos → collapsed byte pos
     let mut pending_space = false;
@@ -40,22 +80,77 @@ pub fn layout_text(inlines: &[Inline]) -> LayoutText {
     }
     map[raw.len()] = text.len();
 
+    let remap = |s: usize, e: usize| (map[s].min(text.len()), map[e].min(text.len()));
     let links = links
         .into_iter()
-        .map(|(s, e)| (map[s].min(text.len()), map[e].min(text.len())))
+        .map(|(s, e)| remap(s, e))
         .filter(|(s, e)| s < e)
         .collect();
-    LayoutText { text, links }
+    let faces = faces
+        .into_iter()
+        .map(|(s, e, f)| {
+            let (s, e) = remap(s, e);
+            (s, e, f)
+        })
+        .filter(|(s, e, _)| s < e)
+        .collect();
+    LayoutText { text, links, faces }
 }
 
-fn collect(inlines: &[Inline], in_link: bool, out: &mut String, links: &mut Vec<(usize, usize)>) {
+#[allow(clippy::too_many_arguments)]
+fn collect(
+    inlines: &[Inline],
+    in_link: bool,
+    inherited: (bool, bool), // (bold, italic), OR-combined down the span stack
+    styles: &[Style],
+    honor_styles: bool,
+    out: &mut String,
+    links: &mut Vec<(usize, usize)>,
+    faces: &mut Vec<(usize, usize, Face)>,
+) {
     for inline in inlines {
         match inline {
-            Inline::Text(s) => out.push_str(s),
-            Inline::Span(sp) => collect(&sp.children, in_link, out, links),
+            Inline::Text(s) => {
+                let start = out.len();
+                out.push_str(s);
+                if honor_styles {
+                    let face = Face::pick(inherited.0, inherited.1);
+                    if face != Face::Regular {
+                        faces.push((start, out.len(), face));
+                    }
+                }
+            }
+            Inline::Span(sp) => {
+                let mut style_flags = inherited;
+                if let Some(idx) = sp.style {
+                    if let Some(style) = styles.get(idx as usize) {
+                        style_flags.0 |= style.bold;
+                        style_flags.1 |= style.italic;
+                    }
+                }
+                collect(
+                    &sp.children,
+                    in_link,
+                    style_flags,
+                    styles,
+                    honor_styles,
+                    out,
+                    links,
+                    faces,
+                );
+            }
             Inline::Link(l) => {
                 let start = out.len();
-                collect(&l.children, true, out, links);
+                collect(
+                    &l.children,
+                    true,
+                    inherited,
+                    styles,
+                    honor_styles,
+                    out,
+                    links,
+                    faces,
+                );
                 if !in_link {
                     links.push((start, out.len()));
                 }
@@ -82,12 +177,14 @@ pub struct Line {
 /// Greedy first-fit line breaking (§5). Break opportunities exist only
 /// after a collapsed space; oversized segments force-break before the
 /// first overflowing glyph with a minimum of one glyph per line.
-pub fn break_lines(font: &FontMetrics, text: &str, size_um: i64, max_width_um: i64) -> Vec<Line> {
+/// Measurement is face-attributed via the layout text (with no face
+/// ranges this is byte-identical to the 1.0 contract).
+pub fn break_lines(lt: &LayoutText, size_um: i64, max_width_um: i64) -> Vec<Line> {
+    let text = &lt.text;
     let mut lines = Vec::new();
     if text.is_empty() {
         return lines;
     }
-    let space_w = font.space_advance_um(size_um);
 
     let mut line_start = 0usize;
     let mut line_width = 0i64;
@@ -100,8 +197,13 @@ pub fn break_lines(font: &FontMetrics, text: &str, size_um: i64, max_width_um: i
         let word_end = pos + word.len();
         pos = word_end + 1; // step over the separating space
 
-        let sep_w = if line_width > 0 { space_w } else { 0 };
-        let word_w = font.text_width_um(word, size_um);
+        // The separator space is measured in its own attributed face.
+        let sep_w = if line_width > 0 && word_start > 0 {
+            lt.width_um(word_start - 1, word_start, size_um)
+        } else {
+            0
+        };
+        let word_w = lt.width_um(word_start, word_end, size_um);
 
         if line_width + sep_w + word_w <= max_width_um {
             line_width += sep_w + word_w;
@@ -129,7 +231,8 @@ pub fn break_lines(font: &FontMetrics, text: &str, size_um: i64, max_width_um: i
             let cw = if c.is_control() {
                 0
             } else {
-                font.char_advance_um(c, size_um)
+                let at = word_start + off;
+                lt.width_um(at, at + c.len_utf8(), size_um)
             };
             if seg_width > 0 && seg_width + cw > max_width_um {
                 lines.push(Line {
@@ -207,6 +310,14 @@ mod tests {
     use super::*;
     use vsd_core::tree::{Link, Span};
 
+    fn plain(text: &str) -> LayoutText {
+        LayoutText {
+            text: text.into(),
+            links: vec![],
+            faces: vec![],
+        }
+    }
+
     #[test]
     fn whitespace_collapses_and_links_remap() {
         let inlines = vec![
@@ -220,34 +331,64 @@ mod tests {
                 children: vec![Inline::Text("  tail".into())],
             }),
         ];
-        let lt = layout_text(&inlines);
+        let lt = layout_text(&inlines, &[], false);
         assert_eq!(lt.text, "Hello world a link tail");
         assert_eq!(lt.links.len(), 1);
         let (s, e) = lt.links[0];
         assert_eq!(&lt.text[s..e], "a link");
+        assert!(lt.faces.is_empty());
+    }
+
+    #[test]
+    fn styles_attribute_faces_only_when_honored() {
+        let styles = [Style {
+            bold: true,
+            italic: false,
+            underline: false,
+            mono: false,
+        }];
+        let inlines = vec![
+            Inline::Text("plain ".into()),
+            Inline::Span(Span {
+                style: Some(0),
+                children: vec![Inline::Text("bold".into())],
+            }),
+        ];
+        // Engine 1.0: styles ignored, byte-identical behavior.
+        let v10 = layout_text(&inlines, &styles, false);
+        assert!(v10.faces.is_empty());
+        assert_eq!(v10.face_at(7), Face::Regular);
+        // Engine 1.1: the bold range is attributed and measured bolder.
+        let v11 = layout_text(&inlines, &styles, true);
+        assert_eq!(v11.text, "plain bold");
+        assert_eq!(v11.face_at(7), Face::Bold);
+        assert!(
+            v11.width_um(6, 10, 3881) > v10.width_um(6, 10, 3881),
+            "bold advances must be wider than regular"
+        );
     }
 
     #[test]
     fn greedy_breaking_fills_lines() {
         let font = FontMetrics::get();
         let size = 3881;
-        let text = "aaa bbb ccc";
+        let lt = plain("aaa bbb ccc");
         let w_space = font.space_advance_um(size);
         // Width fits exactly the first two words.
         let max = font.text_width_um("aaa", size) + w_space + font.text_width_um("bbb", size);
-        let lines = break_lines(font, text, size, max);
+        let lines = break_lines(&lt, size, max);
         assert_eq!(lines.len(), 2);
-        assert_eq!(&text[lines[0].start..lines[0].end], "aaa bbb");
-        assert_eq!(&text[lines[1].start..lines[1].end], "ccc");
+        assert_eq!(&lt.text[lines[0].start..lines[0].end], "aaa bbb");
+        assert_eq!(&lt.text[lines[1].start..lines[1].end], "ccc");
     }
 
     #[test]
     fn oversized_word_force_breaks() {
         let font = FontMetrics::get();
         let size = 3881;
-        let text = "abcdefgh";
+        let lt = plain("abcdefgh");
         let max = font.text_width_um("abc", size); // ~3 glyphs per line
-        let lines = break_lines(font, text, size, max);
+        let lines = break_lines(&lt, size, max);
         assert!(lines.len() >= 2);
         // Every line has at least one glyph and no line exceeds max.
         for l in &lines {
@@ -255,8 +396,8 @@ mod tests {
             assert!(l.width_um <= max, "line overflows");
         }
         // Concatenation reproduces the word.
-        let joined: String = lines.iter().map(|l| &text[l.start..l.end]).collect();
-        assert_eq!(joined, text);
+        let joined: String = lines.iter().map(|l| &lt.text[l.start..l.end]).collect();
+        assert_eq!(joined, lt.text);
     }
 
     #[test]

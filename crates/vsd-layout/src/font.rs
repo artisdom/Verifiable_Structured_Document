@@ -7,15 +7,74 @@
 
 use std::sync::OnceLock;
 
-use ttf_parser::Face;
-
 // Re-exported for vsd-render and vsd-pdf, which must use the *same*
 // pinned parser the metrics came from.
 pub use ttf_parser::{GlyphId, OutlineBuilder};
 
-/// The embedded font binary (SHA-256
+/// The embedded regular face (SHA-256
 /// `478c558ea716033cd60c03438f628dfa75694dcf6b5f6d505a2f05fd2b4f3823`).
 pub static FONT_BYTES: &[u8] = include_bytes!("../assets/NotoSans-Regular.ttf");
+static FONT_BOLD: &[u8] = include_bytes!("../assets/NotoSans-Bold.ttf");
+static FONT_ITALIC: &[u8] = include_bytes!("../assets/NotoSans-Italic.ttf");
+static FONT_BOLD_ITALIC: &[u8] = include_bytes!("../assets/NotoSans-BoldItalic.ttf");
+
+/// A face of the pinned family (engine 1.1, LAYOUT-1.1.md). Display
+/// lists carry the index in `TextRun::font`. Engine 1.0 only ever
+/// emits `Regular`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum Face {
+    Regular = 0,
+    Bold = 1,
+    Italic = 2,
+    BoldItalic = 3,
+}
+
+impl Face {
+    pub const ALL: [Face; 4] = [Face::Regular, Face::Bold, Face::Italic, Face::BoldItalic];
+
+    pub fn index(self) -> u64 {
+        self as u64
+    }
+
+    /// Display lists from future engines may carry unknown indices;
+    /// consumers fall back to Regular rather than failing to draw.
+    pub fn from_index(i: u64) -> Face {
+        match i {
+            1 => Face::Bold,
+            2 => Face::Italic,
+            3 => Face::BoldItalic,
+            _ => Face::Regular,
+        }
+    }
+
+    pub fn pick(bold: bool, italic: bool) -> Face {
+        match (bold, italic) {
+            (false, false) => Face::Regular,
+            (true, false) => Face::Bold,
+            (false, true) => Face::Italic,
+            (true, true) => Face::BoldItalic,
+        }
+    }
+
+    /// The face's TTF binary (for PDF embedding / rasterization).
+    pub fn bytes(self) -> &'static [u8] {
+        match self {
+            Face::Regular => FONT_BYTES,
+            Face::Bold => FONT_BOLD,
+            Face::Italic => FONT_ITALIC,
+            Face::BoldItalic => FONT_BOLD_ITALIC,
+        }
+    }
+
+    pub fn name(self) -> &'static str {
+        match self {
+            Face::Regular => "NotoSans-Regular",
+            Face::Bold => "NotoSans-Bold",
+            Face::Italic => "NotoSans-Italic",
+            Face::BoldItalic => "NotoSans-BoldItalic",
+        }
+    }
+}
 
 /// The one rounding primitive of the contract (§1.1):
 /// `floor((a × b + floor(d/2)) / d)`, evaluated in 128-bit precision.
@@ -27,31 +86,49 @@ pub fn muldiv(a: i64, b: i64, d: i64) -> i64 {
 }
 
 pub struct FontMetrics {
-    face: Face<'static>,
+    face: ttf_parser::Face<'static>,
     pub upem: i64,
     pub ascent_units: i64,
     pub descent_units: i64,
     pub line_gap_units: i64,
 }
 
-static METRICS: OnceLock<FontMetrics> = OnceLock::new();
+static METRICS: OnceLock<[FontMetrics; 4]> = OnceLock::new();
 
 impl FontMetrics {
-    /// The engine's font, parsed once.
-    pub fn get() -> &'static FontMetrics {
+    fn parse_face(bytes: &'static [u8]) -> FontMetrics {
+        let face = ttf_parser::Face::parse(bytes, 0).expect("embedded font must parse");
+        FontMetrics {
+            upem: face.units_per_em() as i64,
+            ascent_units: face.ascender() as i64,
+            descent_units: face.descender() as i64,
+            line_gap_units: face.line_gap() as i64,
+            face,
+        }
+    }
+
+    fn all() -> &'static [FontMetrics; 4] {
         METRICS.get_or_init(|| {
-            let face = Face::parse(FONT_BYTES, 0).expect("embedded font must parse");
-            FontMetrics {
-                upem: face.units_per_em() as i64,
-                ascent_units: face.ascender() as i64,
-                descent_units: face.descender() as i64,
-                line_gap_units: face.line_gap() as i64,
-                face,
-            }
+            [
+                Self::parse_face(Face::Regular.bytes()),
+                Self::parse_face(Face::Bold.bytes()),
+                Self::parse_face(Face::Italic.bytes()),
+                Self::parse_face(Face::BoldItalic.bytes()),
+            ]
         })
     }
 
-    pub fn face(&self) -> &Face<'static> {
+    /// The regular face — baseline metrics and engine-1.0 behavior.
+    pub fn get() -> &'static FontMetrics {
+        &Self::all()[0]
+    }
+
+    /// Metrics for a specific face (engine 1.1+).
+    pub fn face_metrics(face: Face) -> &'static FontMetrics {
+        &Self::all()[face as usize]
+    }
+
+    pub fn face(&self) -> &ttf_parser::Face<'static> {
         &self.face
     }
 

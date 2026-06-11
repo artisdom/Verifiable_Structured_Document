@@ -12,6 +12,7 @@ categories.workspace = true
 
 [dependencies]
 vsd-core = { workspace = true, features = ["std"] }
+blake3 = { workspace = true, features = ["std"] }
 # Exact pin: the metrics parser is part of the determinism contract.
 ttf-parser = "=0.25.1"
 thiserror = { workspace = true, features = ["std"] }

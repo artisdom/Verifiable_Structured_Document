@@ -801,6 +801,169 @@ fn sealed_disclosure_round_trip_with_signature() {
     assert!(!encoded.windows(secret.len()).any(|w| w == secret));
 }
 
+/// A document whose paragraph carries a bold span (style table entry 0).
+fn styled_document() -> Document {
+    use vsd_core::manifest::Style;
+    use vsd_core::tree::Span;
+
+    let root = Node::Doc(Doc {
+        lang: "en".into(),
+        dir: Direction::Ltr,
+        children: vec![
+            Node::Heading(Heading {
+                level: 1,
+                children: vec![Inline::Text("Faces".into())],
+            }),
+            Node::Para(Para {
+                children: vec![
+                    Inline::Text("plain then ".into()),
+                    Inline::Span(Span {
+                        style: Some(0),
+                        children: vec![Inline::Text("bold words".into())],
+                    }),
+                    Inline::Text(" then plain again".into()),
+                ],
+            }),
+        ],
+    });
+    DocumentBuilder::new(root)
+        .resources(ResourceTable {
+            entries: vec![],
+            styles: vec![Style {
+                bold: true,
+                italic: false,
+                underline: false,
+                mono: false,
+            }],
+        })
+        .build()
+        .unwrap()
+}
+
+#[test]
+fn engine_versions_are_dispatched_and_both_verifiable() {
+    use vsd_layout::{EngineVersion, LayoutOptions};
+
+    let doc = styled_document();
+
+    // Engine 1.0: styles affect nothing; every run is the regular face.
+    let opts_10 = LayoutOptions::default().with_engine(EngineVersion::V1_0);
+    let pages_10 = vsd_layout::layout_document(&doc, &opts_10).unwrap();
+    for page in &pages_10 {
+        for op in &page.ops {
+            if let vsd_core::layout::DisplayOp::TextRun { font, .. } = op {
+                assert_eq!(*font, 0, "engine 1.0 must never emit non-regular faces");
+            }
+        }
+    }
+
+    // Engine 1.1: the bold span gets the bold face and wider advances.
+    let opts_11 = LayoutOptions::default().with_engine(EngineVersion::V1_1);
+    let pages_11 = vsd_layout::layout_document(&doc, &opts_11).unwrap();
+    let bold_runs: Vec<&str> = pages_11
+        .iter()
+        .flat_map(|p| &p.ops)
+        .filter_map(|op| match op {
+            vsd_core::layout::DisplayOp::TextRun { font: 1, text, .. } => Some(text.as_str()),
+            _ => None,
+        })
+        .collect();
+    assert!(
+        bold_runs.iter().any(|t| t.contains("bold")),
+        "bold span must become a bold-face run, got {bold_runs:?}"
+    );
+
+    // Both versions produce caches that recompute byte-identically —
+    // and each cache pins its version, forever.
+    for opts in [opts_10, opts_11] {
+        let laid = vsd_layout::add_render_cache(&doc, &opts).unwrap();
+        let cache = laid.render_cache().unwrap().unwrap();
+        assert_eq!(cache.engine_version, opts.engine.as_str());
+        assert!(matches!(
+            vsd_layout::verify_render_cache(&laid).unwrap(),
+            vsd_layout::RecomputeOutcome::Match { .. }
+        ));
+    }
+
+    // The two versions disagree about this document (bold is wider), so
+    // their caches must differ — version pinning is load-bearing.
+    let laid_10 = vsd_layout::add_render_cache(&doc, &opts_10).unwrap();
+    let laid_11 = vsd_layout::add_render_cache(&doc, &opts_11).unwrap();
+    assert_ne!(
+        laid_10.render_cache().unwrap().unwrap().layout_hash,
+        laid_11.render_cache().unwrap().unwrap().layout_hash,
+    );
+}
+
+#[test]
+fn incremental_relayout_reuses_fragments_and_matches_from_scratch() {
+    use vsd_layout::{layout_document, layout_document_with_session, LayoutOptions, LayoutSession};
+
+    let make_doc = |changed: bool| {
+        let children: Vec<Node> = (0..120)
+            .map(|i| {
+                let text = if changed && i == 60 {
+                    "Paragraph 60: EDITED — the only paragraph that changed.".to_string()
+                } else {
+                    format!(
+                        "Paragraph {i}: the quick brown fox jumps over the lazy dog, \
+                         repeatedly and at considerable length, to fill the measure."
+                    )
+                };
+                Node::Para(Para {
+                    children: vec![Inline::Text(text)],
+                })
+            })
+            .collect();
+        DocumentBuilder::new(Node::Doc(Doc {
+            lang: "en".into(),
+            dir: Direction::Ltr,
+            children,
+        }))
+        .build()
+        .unwrap()
+    };
+
+    let opts = LayoutOptions::default();
+    let mut session = LayoutSession::new();
+
+    // First layout: all misses, output identical to the plain path.
+    let doc_a = make_doc(false);
+    let warm = layout_document_with_session(&doc_a, &opts, Some(&mut session)).unwrap();
+    assert_eq!(session.misses, 120);
+    assert_eq!(session.hits, 0);
+    let fresh = layout_document(&doc_a, &opts).unwrap();
+    assert_eq!(warm.len(), fresh.len());
+    for (a, b) in warm.iter().zip(&fresh) {
+        assert_eq!(
+            a.to_value().encode().unwrap(),
+            b.to_value().encode().unwrap(),
+            "session layout must be byte-identical to from-scratch layout"
+        );
+    }
+
+    // Identical document again: zero shaping work.
+    let again = layout_document_with_session(&doc_a, &opts, Some(&mut session)).unwrap();
+    assert_eq!(session.hits, 120);
+    assert_eq!(session.misses, 0);
+    assert_eq!(again.len(), warm.len());
+
+    // One edited paragraph: exactly one fragment re-shapes (the
+    // per-section layout fence of ROADMAP 2g), and the result still
+    // matches a from-scratch layout of the edited document.
+    let doc_b = make_doc(true);
+    let incremental = layout_document_with_session(&doc_b, &opts, Some(&mut session)).unwrap();
+    assert_eq!(session.misses, 1, "only the edited paragraph re-shapes");
+    assert_eq!(session.hits, 119);
+    let fresh_b = layout_document(&doc_b, &opts).unwrap();
+    for (a, b) in incremental.iter().zip(&fresh_b) {
+        assert_eq!(
+            a.to_value().encode().unwrap(),
+            b.to_value().encode().unwrap()
+        );
+    }
+}
+
 #[test]
 fn subtree_signature_scope() {
     let doc = sample_document();

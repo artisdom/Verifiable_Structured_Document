@@ -180,11 +180,14 @@ ops `text` (x, y baseline, font uint, size pt, color RGBA bytes4, text,
 produced by exact integer→float conversion (see the layout contract).
 
 Verification levels: (1) structural — `layout-hash` matches the page
-list, pages decode; (2) **recomputation** — re-run the named engine and
-require identical page object ids. A cache that displays anything other
-than the tree's content cannot survive (2). The reference engine is
-`vsd-layout/1.0.0`, normative contract in
-[docs/LAYOUT-1.0.md](../docs/LAYOUT-1.0.md).
+list, pages decode; (2) **recomputation** — re-run the named engine *at
+the version the cache pins* and require identical page object ids. A
+cache that displays anything other than the tree's content cannot
+survive (2). Engine versions are immutable contracts: once shipped,
+their output never changes, so old caches stay verifiable forever.
+Reference contracts: `vsd-layout/1.0.0`
+([docs/LAYOUT-1.0.md](../docs/LAYOUT-1.0.md)) and `vsd-layout/1.1.0`
+([docs/LAYOUT-1.1.md](../docs/LAYOUT-1.1.md), adds bold/italic faces).
 
 ## 8. (reserved)
 
