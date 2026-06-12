@@ -17,20 +17,32 @@ pub static FONT_BYTES: &[u8] = include_bytes!("../assets/NotoSans-Regular.ttf");
 static FONT_BOLD: &[u8] = include_bytes!("../assets/NotoSans-Bold.ttf");
 static FONT_ITALIC: &[u8] = include_bytes!("../assets/NotoSans-Italic.ttf");
 static FONT_BOLD_ITALIC: &[u8] = include_bytes!("../assets/NotoSans-BoldItalic.ttf");
+static FONT_MONO: &[u8] = include_bytes!("../assets/NotoSansMono-Regular.ttf");
+static FONT_HEBREW: &[u8] = include_bytes!("../assets/NotoSansHebrew-Regular.ttf");
 
-/// A face of the pinned family (engine 1.1, LAYOUT-1.1.md). Display
-/// lists carry the index in `TextRun::font`. Engine 1.0 only ever
-/// emits `Regular`.
+/// A face of the pinned family. Display lists carry the index in
+/// `TextRun::font`. Engine 1.0 only ever emits `Regular`; 1.1 adds
+/// indices 1–3 (LAYOUT-1.1.md); 1.2 adds Mono and Hebrew
+/// (LAYOUT-1.2.md).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Face {
     Regular = 0,
     Bold = 1,
     Italic = 2,
     BoldItalic = 3,
+    Mono = 4,
+    Hebrew = 5,
 }
 
 impl Face {
-    pub const ALL: [Face; 4] = [Face::Regular, Face::Bold, Face::Italic, Face::BoldItalic];
+    pub const ALL: [Face; 6] = [
+        Face::Regular,
+        Face::Bold,
+        Face::Italic,
+        Face::BoldItalic,
+        Face::Mono,
+        Face::Hebrew,
+    ];
 
     pub fn index(self) -> u64 {
         self as u64
@@ -43,6 +55,8 @@ impl Face {
             1 => Face::Bold,
             2 => Face::Italic,
             3 => Face::BoldItalic,
+            4 => Face::Mono,
+            5 => Face::Hebrew,
             _ => Face::Regular,
         }
     }
@@ -56,6 +70,27 @@ impl Face {
         }
     }
 
+    /// Engine 1.2 style resolution: `mono` overrides weight/slant (the
+    /// pinned mono family ships one face in this engine version).
+    pub fn pick_with_mono(bold: bool, italic: bool, mono: bool) -> Face {
+        if mono {
+            Face::Mono
+        } else {
+            Face::pick(bold, italic)
+        }
+    }
+
+    /// Per-character script fallback (engine 1.2): Hebrew-block
+    /// codepoints come from the Hebrew face regardless of styling
+    /// (it ships one face in this engine version).
+    pub fn for_char(self, c: char) -> Face {
+        if matches!(c, '\u{0590}'..='\u{05FF}' | '\u{FB1D}'..='\u{FB4F}') {
+            Face::Hebrew
+        } else {
+            self
+        }
+    }
+
     /// The face's TTF binary (for PDF embedding / rasterization).
     pub fn bytes(self) -> &'static [u8] {
         match self {
@@ -63,6 +98,8 @@ impl Face {
             Face::Bold => FONT_BOLD,
             Face::Italic => FONT_ITALIC,
             Face::BoldItalic => FONT_BOLD_ITALIC,
+            Face::Mono => FONT_MONO,
+            Face::Hebrew => FONT_HEBREW,
         }
     }
 
@@ -72,6 +109,8 @@ impl Face {
             Face::Bold => "NotoSans-Bold",
             Face::Italic => "NotoSans-Italic",
             Face::BoldItalic => "NotoSans-BoldItalic",
+            Face::Mono => "NotoSansMono-Regular",
+            Face::Hebrew => "NotoSansHebrew-Regular",
         }
     }
 }
@@ -93,7 +132,7 @@ pub struct FontMetrics {
     pub line_gap_units: i64,
 }
 
-static METRICS: OnceLock<[FontMetrics; 4]> = OnceLock::new();
+static METRICS: OnceLock<[FontMetrics; 6]> = OnceLock::new();
 
 impl FontMetrics {
     fn parse_face(bytes: &'static [u8]) -> FontMetrics {
@@ -107,13 +146,15 @@ impl FontMetrics {
         }
     }
 
-    fn all() -> &'static [FontMetrics; 4] {
+    fn all() -> &'static [FontMetrics; 6] {
         METRICS.get_or_init(|| {
             [
                 Self::parse_face(Face::Regular.bytes()),
                 Self::parse_face(Face::Bold.bytes()),
                 Self::parse_face(Face::Italic.bytes()),
                 Self::parse_face(Face::BoldItalic.bytes()),
+                Self::parse_face(Face::Mono.bytes()),
+                Self::parse_face(Face::Hebrew.bytes()),
             ]
         })
     }

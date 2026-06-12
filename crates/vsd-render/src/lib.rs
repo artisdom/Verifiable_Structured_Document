@@ -54,10 +54,11 @@ pub fn render_page(doc: &Document, page: &Page, dpi: f64) -> Result<Pixmap> {
                 font,
                 size_pt,
                 color,
+                rtl,
                 text,
                 ..
             } => {
-                draw_text_face(
+                draw_text_run(
                     &mut pixmap,
                     *x * ppm,
                     *y * ppm,
@@ -65,6 +66,7 @@ pub fn render_page(doc: &Document, page: &Page, dpi: f64) -> Result<Pixmap> {
                     Face::from_index(*font),
                     *color,
                     text,
+                    *rtl,
                 );
             }
             DisplayOp::Image { x, y, w, h, res } => {
@@ -136,8 +138,6 @@ fn draw_text(
     draw_text_face(pixmap, x, baseline_y, size_px, Face::Regular, color, text)
 }
 
-/// Draw a run with a specific face — glyph outlines and advances both
-/// come from the face the engine measured with.
 fn draw_text_face(
     pixmap: &mut Pixmap,
     x: f64,
@@ -147,6 +147,25 @@ fn draw_text_face(
     color: [u8; 4],
     text: &str,
 ) {
+    draw_text_run(pixmap, x, baseline_y, size_px, typeface, color, text, false)
+}
+
+/// Draw a run with a specific face — glyph outlines and advances both
+/// come from the face the engine measured with. An RTL run stores its
+/// text in logical order; the glyphs are placed right-to-left from the
+/// run's right edge, i.e. drawn in reversed logical order from `x`
+/// (the run's left edge, format 0.3).
+#[allow(clippy::too_many_arguments)]
+fn draw_text_run(
+    pixmap: &mut Pixmap,
+    x: f64,
+    baseline_y: f64,
+    size_px: f64,
+    typeface: Face,
+    color: [u8; 4],
+    text: &str,
+    rtl: bool,
+) {
     let metrics = FontMetrics::face_metrics(typeface);
     let face = metrics.face();
     let scale = size_px as f32 / metrics.upem as f32;
@@ -155,9 +174,14 @@ fn draw_text_face(
     paint.set_color(rgba(color));
     paint.anti_alias = true;
 
+    let chars: Vec<char> = if rtl {
+        text.chars().rev().collect()
+    } else {
+        text.chars().collect()
+    };
     let mut pen_x = x as f32;
     let y0 = baseline_y as f32;
-    for c in text.chars() {
+    for c in chars {
         if c.is_control() {
             continue;
         }

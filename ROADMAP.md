@@ -40,7 +40,7 @@ derived; container as dumb transport. Each layer is independently verifiable.
 ```
 Phase 0  Foundations (canonical layer)        ████████████████████  SHIPPED (v0.1)
 Phase 1  Hardening & ecosystem hygiene        ███████████████████░  SHIPPED (v0.3) — crates.io publish awaits public repo
-Phase 2  The render layer (vsd-layout)        ██████████████████░░  SHIPPED (v0.5→0.11) — engine 1.1 faces + incremental relayout (2g) done; 2f script widening (RTL/CJK/complex) remains the long tail
+Phase 2  The render layer (vsd-layout)        ███████████████████░  SHIPPED (v0.5→0.12) — engines 1.0/1.1/1.2 (faces, mono, underline, justification, Hebrew bidi) + incremental relayout done; 2h shaped scripts (Arabic/Indic/CJK) remain the long tail
 Phase 3  PDF interop (the adoption wedge)     ██████████████░░░░░░  SHIPPED (v0.7) — export + hybrid round-trip + md on-ramp; rich import (3b/3c) + JXL (3e) open
 Phase 4  Viewing & authoring experience       ████████████░░░░░░░░  SHIPPED (v0.8) — vsd-view, <vsd-doc> WASM viewer, compose API, diff --html, interactive fill; bindings (4c) + Pandoc (4d) open
 Phase 5  Trust infrastructure at scale        █████████████████░░░  SHIPPED (v0.9→0.10) — salting (5f) + reference server (5e) now complete; full PKI (5a) + C2PA serialization (5c) open
@@ -223,22 +223,37 @@ forever against their pinned engine.
       Windows, regenerated and diffed on Linux in CI, recomputed by the
       test suite on all three OSes. Byte-identical page objects, proven on
       every push.
-- [◐] **2f. Widening, versioned** — the versioning machinery is now real:
-      **engine 1.1 shipped (v0.11)** with genuine bold/italic/bold-italic
-      faces (three more pinned Noto Sans binaries, hashes in
-      [docs/LAYOUT-1.1.md](docs/LAYOUT-1.1.md); real metrics, never
-      synthetic styling; baselines stay on the Regular face so vertical
-      rhythm never changes). Verification dispatches on the cache's
-      pinned version — **1.0 caches recompute byte-identically forever**,
-      proven by keeping the 1.0 golden conformance vector alongside a new
-      1.1 vector; the test suite shows the two engines produce different
-      hashes for styled content (version pinning is load-bearing). PDF
-      export embeds every used face; viewer/rasterizer draw with the face
-      the engine measured with. ☐ Still open, each gated on its own
-      pinned dependency: RTL + bidi and complex scripts (need a pinned
-      pure-Rust shaper — the next major engine effort), CJK + vertical
-      text (needs CJK fonts), floats & multi-column, MathML layout,
-      justification + hyphenation, underline/mono rendering.
+- [x] **2f. Widening, versioned** — the versioning machinery is real and
+      has now carried two widenings. **Engine 1.1 (v0.11)**: genuine
+      bold/italic/bold-italic faces (three more pinned Noto Sans
+      binaries, hashes in [docs/LAYOUT-1.1.md](docs/LAYOUT-1.1.md); real
+      metrics, never synthetic styling; baselines stay on the Regular
+      face so vertical rhythm never changes). **Engine 1.2 (v0.12,
+      [docs/LAYOUT-1.2.md](docs/LAYOUT-1.2.md))**: monospace (code
+      blocks + `mono` spans, pinned Noto Sans Mono), underline rects,
+      fully justified body paragraphs (integer-µm slack distribution
+      over word gaps), and **RTL/bidi for non-joining scripts** — UAX #9
+      ordering (pinned `unicode-bidi`), per-script fallback to a pinned
+      Hebrew face, right-aligned `dir=rtl` line boxes, and a format-0.3
+      `rtl` run flag that keeps display-list text in **logical order**
+      so back-references, search, and disclosure are untouched by visual
+      reordering. Scripts 1.2 cannot set faithfully (Arabic/Indic
+      shaping, Thai breaking, CJK) are **refused, never mis-rendered**;
+      frozen engines keep their frozen behavior. Verification dispatches
+      on the cache's pinned version — **1.0/1.1 caches recompute
+      byte-identically forever**, proven by golden conformance vectors
+      for all three engines side by side (the 1.0/1.1 layout hashes
+      survived the 1.2 widening unchanged). PDF export embeds every used
+      face and writes RTL glyphs in visual order; viewer/rasterizer draw
+      with the face the engine measured with and mirror highlight
+      geometry inside RTL runs.
+- [ ] **2h. Shaped scripts & page furniture** (the long tail beyond 1.2,
+      each gated on its own pinned dependency): Arabic/Indic via a
+      pinned pure-Rust shaper (the next major engine effort — metrics
+      truth requires real shaping, not glyph-per-char), CJK + vertical
+      text (CJK fonts + breaking rules), Thai/Lao dictionary breaking,
+      bracket mirroring + mark positioning, floats & multi-column,
+      MathML layout, hyphenation, widow/orphan control.
 - [x] **2g. Incremental relayout** (§13.2): `LayoutSession` — a fragment
       cache keyed by (block canonical bytes, position, width, engine
       version, inputs fingerprint), so block fragmentation (shaping +
@@ -561,6 +576,7 @@ core spec before a working prototype and an adversarial review.
 | **0.9** ✅ | Trust at scale | Hybrid PQ signatures, transparency log, selective disclosure, cert binding, provenance authoring (full PKI chains + RFC 3161 + C2PA serialization carry into the 1.0 cycle) |
 | **0.10** ✅ | Standardization prep | Consolidated CC-BY spec (format 0.2: salted disclosure), conformance program, governance docs, regulatory dossiers, reference object-store server, in-browser signature verification |
 | **0.11** ✅ | Engine 1.1 + incremental | Bold/italic/bold-italic faces (versioned contract, 1.0 caches verify forever), `LayoutSession` incremental relayout (one edit = one re-shape, byte-identical output) |
+| **0.12** ✅ | Engine 1.2 typography | Monospace + underline + justification + Hebrew bidi/RTL (format 0.3 `rtl` flag, logical-order runs); unsupported scripts refused, never mis-rendered; 1.0/1.1 golden hashes unchanged |
 | **1.0** | Freeze | Spec 1.0, two implementations, audit complete, ISO/W3C track |
 
 *Versioning policy:* the format major version and the crate versions decouple
@@ -574,9 +590,10 @@ crates keep evolving.
 - **Want maximum leverage now?** Grow the conformance corpus (`testdata/`)
   with adversarial vectors, or run long fuzz campaigns against the targets
   in `fuzz/` — the harnesses exist; depth is what's wanted.
-- **Want the hard problem?** Phase 2f — widening `vsd-layout` to RTL/bidi
-  (engine 1.1) while keeping the determinism contract airtight; the 1.0
-  contract (docs/LAYOUT-1.0.md) shows the required rigor.
+- **Want the hard problem?** Phase 2h — widening `vsd-layout` to shaped
+  scripts (Arabic/Indic need a pinned pure-Rust shaper) while keeping the
+  determinism contract airtight; the 1.0→1.2 contracts
+  (docs/LAYOUT-1.x.md) show the required rigor.
 - **Want adoption?** Phase 3b's open half — walking a foreign tagged PDF's
   structure tree into a content tree — or richer `StructureRecovery`
   built-ins (columns, tables); the trait and pipeline already exist. A

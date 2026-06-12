@@ -649,16 +649,27 @@ fn long_documents_paginate_deterministically() {
 #[test]
 fn rtl_is_refused_by_engine_1_0() {
     let doc = DocumentBuilder::new(Node::Doc(Doc {
-        lang: "ar".into(),
+        lang: "he".into(),
         dir: Direction::Rtl,
         children: vec![],
     }))
     .build()
     .unwrap();
-    assert!(matches!(
-        vsd_layout::layout_document(&doc, &vsd_layout::LayoutOptions::default()),
-        Err(vsd_layout::LayoutError::Unsupported(_))
-    ));
+    // Engines 1.0/1.1 predate bidi: dir=rtl is refused, never guessed.
+    for engine in [
+        vsd_layout::EngineVersion::V1_0,
+        vsd_layout::EngineVersion::V1_1,
+    ] {
+        assert!(matches!(
+            vsd_layout::layout_document(
+                &doc,
+                &vsd_layout::LayoutOptions::default().with_engine(engine),
+            ),
+            Err(vsd_layout::LayoutError::Unsupported(_))
+        ));
+    }
+    // Engine 1.2 (the default) lays RTL documents out.
+    assert!(vsd_layout::layout_document(&doc, &vsd_layout::LayoutOptions::default()).is_ok());
 }
 
 #[test]
@@ -893,6 +904,267 @@ fn engine_versions_are_dispatched_and_both_verifiable() {
         laid_10.render_cache().unwrap().unwrap().layout_hash,
         laid_11.render_cache().unwrap().unwrap().layout_hash,
     );
+}
+
+/// Engine 1.2 (LAYOUT-1.2.md): mono spans and code blocks, underline
+/// rects, Hebrew via per-script fallback with UAX #9 ordering, and
+/// refusal of scripts the engine cannot set faithfully.
+#[test]
+fn engine_1_2_widened_typography() {
+    use vsd_core::layout::DisplayOp;
+    use vsd_core::manifest::Style;
+    use vsd_core::tree::Span;
+    use vsd_layout::LayoutOptions;
+
+    let root = Node::Doc(Doc {
+        lang: "en".into(),
+        dir: Direction::Ltr,
+        children: vec![
+            Node::Para(Para {
+                children: vec![
+                    Inline::Text("call ".into()),
+                    Inline::Span(Span {
+                        style: Some(0),
+                        children: vec![Inline::Text("vsd_verify()".into())],
+                    }),
+                    Inline::Text(" or ".into()),
+                    Inline::Span(Span {
+                        style: Some(1),
+                        children: vec![Inline::Text("underlined".into())],
+                    }),
+                    Inline::Text(" then שלום עולם closes it".into()),
+                ],
+            }),
+            Node::Code(vsd_core::tree::Code {
+                lang: Some("rust".into()),
+                text: "fn main() {}".into(),
+            }),
+        ],
+    });
+    let doc = DocumentBuilder::new(root)
+        .resources(ResourceTable {
+            entries: vec![],
+            styles: vec![
+                Style {
+                    bold: false,
+                    italic: false,
+                    underline: false,
+                    mono: true,
+                },
+                Style {
+                    bold: false,
+                    italic: false,
+                    underline: true,
+                    mono: false,
+                },
+            ],
+        })
+        .build()
+        .unwrap();
+
+    // Default options are engine 1.2.
+    let opts = LayoutOptions::default();
+    assert_eq!(opts.engine.as_str(), "1.2.0");
+    let pages = vsd_layout::layout_document(&doc, &opts).unwrap();
+    let runs: Vec<(&u64, &bool, &String)> = pages
+        .iter()
+        .flat_map(|p| &p.ops)
+        .filter_map(|op| match op {
+            DisplayOp::TextRun {
+                font, rtl, text, ..
+            } => Some((font, rtl, text)),
+            _ => None,
+        })
+        .collect();
+
+    // The mono span and the code block both set in the mono face (4).
+    assert!(runs
+        .iter()
+        .any(|(f, _, t)| **f == 4 && t.contains("vsd_verify")));
+    assert!(runs
+        .iter()
+        .any(|(f, _, t)| **f == 4 && t.contains("fn main")));
+    // Hebrew words come from the Hebrew face (5) as RTL runs in logical
+    // order — the display list stores text, not reordered glyphs.
+    assert!(runs
+        .iter()
+        .any(|(f, rtl, t)| **f == 5 && **rtl && t.contains("שלום")));
+    // LTR words around them never carry the flag.
+    assert!(runs.iter().all(|(_, rtl, t)| !t.contains("call") || !**rtl));
+    // The underline produced a hairline rect (0.1 mm — same rule width
+    // as everywhere else in the contract).
+    assert!(pages.iter().flat_map(|p| &p.ops).any(|op| matches!(
+        op,
+        DisplayOp::Rect { h, .. } if (*h - 0.1).abs() < 1e-9
+    )));
+
+    // The cache pins 1.2.0 and recomputes byte-identically.
+    let laid = vsd_layout::add_render_cache(&doc, &opts).unwrap();
+    let cache = laid.render_cache().unwrap().unwrap();
+    assert_eq!(cache.engine_version, "1.2.0");
+    assert!(matches!(
+        vsd_layout::verify_render_cache(&laid).unwrap(),
+        vsd_layout::RecomputeOutcome::Match { .. }
+    ));
+
+    // And the page raster + PDF export accept the new faces and flag.
+    let page = vsd_core::layout::Page::from_value(&laid.store.get_value(&cache.pages[0]).unwrap())
+        .unwrap();
+    assert!(!vsd_render::render_page_png(&laid, &page, 96.0)
+        .unwrap()
+        .is_empty());
+    assert!(
+        !vsd_pdf::export_pdf(&laid, None, &vsd_pdf::ExportOptions::default())
+            .unwrap()
+            .is_empty()
+    );
+}
+
+/// Engine 1.2 justifies body paragraphs: every line but the last ends
+/// flush at the right content edge. Frozen engines stay ragged.
+#[test]
+fn engine_1_2_justifies_body_paragraphs() {
+    use vsd_core::layout::DisplayOp;
+    use vsd_layout::font::{Face, FontMetrics};
+    use vsd_layout::{EngineVersion, LayoutOptions};
+
+    let words = "the quick brown fox jumps over the lazy dog ".repeat(8);
+    let root = Node::Doc(Doc {
+        lang: "en".into(),
+        dir: Direction::Ltr,
+        children: vec![Node::Para(Para {
+            children: vec![Inline::Text(words)],
+        })],
+    });
+    let doc = DocumentBuilder::new(root).build().unwrap();
+
+    let line_extents = |engine: EngineVersion| -> Vec<f64> {
+        let opts = LayoutOptions::default().with_engine(engine);
+        let pages = vsd_layout::layout_document(&doc, &opts).unwrap();
+        // Right edge of each baseline's last run, in mm.
+        let mut lines: std::collections::BTreeMap<i64, f64> = Default::default();
+        for op in pages.iter().flat_map(|p| &p.ops) {
+            if let DisplayOp::TextRun {
+                x,
+                y,
+                size_pt,
+                text,
+                font,
+                ..
+            } = op
+            {
+                let m = FontMetrics::face_metrics(Face::from_index(*font));
+                let w_mm = text
+                    .chars()
+                    .map(|c| m.char_advance_um(c, (size_pt * 25400.0 / 72.0) as i64) as f64)
+                    .sum::<f64>()
+                    / 1000.0;
+                let key = (y * 1000.0) as i64;
+                let right = x + w_mm;
+                lines
+                    .entry(key)
+                    .and_modify(|r| *r = r.max(right))
+                    .or_insert(right);
+            }
+        }
+        lines.into_values().collect()
+    };
+
+    // A4 content right edge: 210 − 20 mm margin.
+    let extents_12 = line_extents(EngineVersion::V1_2);
+    assert!(extents_12.len() > 2, "paragraph must wrap");
+    for (i, right) in extents_12.iter().enumerate() {
+        if i + 1 < extents_12.len() {
+            assert!(
+                (right - 190.0).abs() < 0.05,
+                "justified line {i} must end flush at 190mm, got {right}"
+            );
+        } else {
+            assert!(*right < 189.0, "last line stays ragged");
+        }
+    }
+    // Engine 1.1 (frozen contract): ragged right everywhere.
+    let extents_11 = line_extents(EngineVersion::V1_1);
+    assert!(extents_11
+        .iter()
+        .take(extents_11.len() - 1)
+        .any(|r| (r - 190.0).abs() > 0.05));
+}
+
+/// A dir=rtl document right-aligns its line boxes: the visually last
+/// run ends flush at the right content edge (190 mm on A4).
+#[test]
+fn engine_1_2_rtl_documents_right_align() {
+    use vsd_core::layout::DisplayOp;
+    use vsd_layout::font::{Face, FontMetrics};
+    use vsd_layout::LayoutOptions;
+
+    let root = Node::Doc(Doc {
+        lang: "he".into(),
+        dir: Direction::Rtl,
+        children: vec![Node::Para(Para {
+            children: vec![Inline::Text("שלום עולם".into())],
+        })],
+    });
+    let doc = DocumentBuilder::new(root).build().unwrap();
+    let pages = vsd_layout::layout_document(&doc, &LayoutOptions::default()).unwrap();
+    let mut right_edge = f64::NEG_INFINITY;
+    let mut saw_rtl = false;
+    for op in pages.iter().flat_map(|p| &p.ops) {
+        if let DisplayOp::TextRun {
+            x,
+            font,
+            size_pt,
+            rtl,
+            text,
+            ..
+        } = op
+        {
+            saw_rtl |= rtl;
+            let m = FontMetrics::face_metrics(Face::from_index(*font));
+            let w_mm = text
+                .chars()
+                .map(|c| m.char_advance_um(c, (size_pt * 25400.0 / 72.0) as i64) as f64)
+                .sum::<f64>()
+                / 1000.0;
+            right_edge = right_edge.max(x + w_mm);
+        }
+    }
+    assert!(saw_rtl, "Hebrew text must produce rtl runs");
+    assert!(
+        (right_edge - 190.0).abs() < 0.05,
+        "rtl line must end flush at the right margin, got {right_edge}"
+    );
+}
+
+/// Scripts engine 1.2 cannot set faithfully are refused with a clear
+/// error — never silently drawn as .notdef boxes. Engine 1.0's frozen
+/// contract (everything maps to .notdef) is unchanged.
+#[test]
+fn engine_1_2_refuses_unsupported_scripts() {
+    use vsd_layout::{EngineVersion, LayoutOptions};
+
+    for sample in ["مرحبا بالعالم", "你好世界", "नमस्ते"] {
+        let root = Node::Doc(Doc {
+            lang: "en".into(),
+            dir: Direction::Ltr,
+            children: vec![Node::Para(Para {
+                children: vec![Inline::Text(format!("mixed {sample} text"))],
+            })],
+        });
+        let doc = DocumentBuilder::new(root).build().unwrap();
+        let err = vsd_layout::layout_document(&doc, &LayoutOptions::default());
+        assert!(
+            matches!(err, Err(vsd_layout::LayoutError::Unsupported(_))),
+            "engine 1.2 must refuse {sample:?}"
+        );
+        // The frozen 1.0 contract still lays it out (as .notdef).
+        assert!(vsd_layout::layout_document(
+            &doc,
+            &LayoutOptions::default().with_engine(EngineVersion::V1_0)
+        )
+        .is_ok());
+    }
 }
 
 #[test]

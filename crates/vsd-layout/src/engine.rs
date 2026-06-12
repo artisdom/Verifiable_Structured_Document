@@ -12,7 +12,7 @@ use vsd_core::manifest::Blob;
 use vsd_core::tree::{Node, Row, Table};
 
 use crate::font::{muldiv, Face, FontMetrics};
-use crate::text::{break_lines, layout_text, measure_code_line, LayoutText};
+use crate::text::{break_lines, layout_text, measure_code_line, LayoutText, Line};
 use crate::{LayoutError, Result};
 
 // --- Normative constants (LAYOUT-1.0.md §6) --------------------------------
@@ -46,6 +46,11 @@ pub enum EngineVersion {
     /// LAYOUT-1.1.md — bold/italic/bold-italic faces honored from the
     /// style table; everything else identical to 1.0.
     V1_1,
+    /// LAYOUT-1.2.md — + monospace (code and `mono` spans), underline
+    /// rendering, justified body paragraphs, and RTL/bidi for
+    /// non-joining scripts (Hebrew). Joining scripts and CJK are
+    /// refused, never mis-rendered.
+    V1_2,
 }
 
 impl EngineVersion {
@@ -53,6 +58,7 @@ impl EngineVersion {
         match self {
             EngineVersion::V1_0 => "1.0.0",
             EngineVersion::V1_1 => "1.1.0",
+            EngineVersion::V1_2 => "1.2.0",
         }
     }
 
@@ -60,13 +66,58 @@ impl EngineVersion {
         match s {
             "1.0.0" => Some(EngineVersion::V1_0),
             "1.1.0" => Some(EngineVersion::V1_1),
+            "1.2.0" => Some(EngineVersion::V1_2),
             _ => None,
         }
     }
 
-    fn honor_styles(self) -> bool {
-        self != EngineVersion::V1_0
+    fn style_policy(self) -> crate::text::StylePolicy {
+        match self {
+            EngineVersion::V1_0 => crate::text::StylePolicy::V1_0,
+            EngineVersion::V1_1 => crate::text::StylePolicy::V1_1,
+            EngineVersion::V1_2 => crate::text::StylePolicy::V1_2,
+        }
     }
+
+    fn justify(self) -> bool {
+        self == EngineVersion::V1_2
+    }
+
+    fn bidi(self) -> bool {
+        self == EngineVersion::V1_2
+    }
+
+    fn mono_code(self) -> bool {
+        self == EngineVersion::V1_2
+    }
+}
+
+/// Scripts engine 1.2 cannot lay out faithfully. Earlier engine
+/// versions keep their frozen `.notdef` behavior; 1.2 claims script
+/// awareness, so it refuses instead of mis-rendering (joining scripts
+/// need a real shaper; CJK needs CJK fonts — both future versions).
+fn refused_script(c: char) -> Option<&'static str> {
+    match c {
+        '\u{0600}'..='\u{06FF}'
+        | '\u{0750}'..='\u{077F}'
+        | '\u{08A0}'..='\u{08FF}'
+        | '\u{FB50}'..='\u{FDFF}'
+        | '\u{FE70}'..='\u{FEFF}' => Some("Arabic (joining script: needs a shaper)"),
+        '\u{0700}'..='\u{074F}' => Some("Syriac (joining script: needs a shaper)"),
+        '\u{0900}'..='\u{0DFF}' => Some("Indic scripts (need a shaper)"),
+        '\u{0E00}'..='\u{0EFF}' => Some("Thai/Lao (need dictionary line breaking)"),
+        '\u{1100}'..='\u{11FF}'
+        | '\u{3040}'..='\u{30FF}'
+        | '\u{3400}'..='\u{4DBF}'
+        | '\u{4E00}'..='\u{9FFF}'
+        | '\u{AC00}'..='\u{D7AF}'
+        | '\u{F900}'..='\u{FAFF}' => Some("CJK (needs CJK fonts)"),
+        _ => None,
+    }
+}
+
+fn is_rtl_char(c: char) -> bool {
+    matches!(c, '\u{0590}'..='\u{05FF}' | '\u{FB1D}'..='\u{FB4F}')
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -81,7 +132,7 @@ impl Default for LayoutOptions {
         LayoutOptions {
             page_width_um: 210_000,
             page_height_um: 297_000,
-            engine: EngineVersion::V1_1,
+            engine: EngineVersion::V1_2,
         }
     }
 }
@@ -111,6 +162,7 @@ enum Op {
         size_um: i64,
         face: Face,
         color: Color,
+        rtl: bool,
         text: String,
         path: Vec<u64>,
         range: (u64, u64),
@@ -142,6 +194,7 @@ impl Op {
                 size_um,
                 face,
                 color,
+                rtl,
                 text,
                 path,
                 range,
@@ -151,6 +204,7 @@ impl Op {
                 font: face.index(),
                 size_pt: pt(size_um),
                 color,
+                rtl,
                 text,
                 node_path: path,
                 char_range: range,
@@ -265,6 +319,8 @@ pub(crate) struct Engine<'a> {
     /// Fingerprint of layout inputs beyond the block itself (field
     /// environment + style table) — part of every cache key.
     inputs_fp: [u8; 32],
+    /// Document base direction is right-to-left (engine 1.2+).
+    base_rtl: bool,
     session: Option<&'a mut LayoutSession>,
     pages: Vec<Page>,
     cur: Vec<DisplayOp>,
@@ -288,11 +344,17 @@ pub fn layout_document_with_session(
     let Node::Doc(d) = &root else {
         return Err(LayoutError::Unsupported("root must be a doc node".into()));
     };
-    if d.dir != vsd_core::tree::Direction::Ltr {
-        return Err(LayoutError::Unsupported(
-            "vsd-layout supports dir=ltr only (rtl arrives in a later engine version)".into(),
-        ));
-    }
+    let base_rtl = match d.dir {
+        vsd_core::tree::Direction::Ltr => false,
+        vsd_core::tree::Direction::Rtl => {
+            if !opts.engine.bidi() {
+                return Err(LayoutError::Unsupported(
+                    "dir=rtl requires engine 1.2 or later".into(),
+                ));
+            }
+            true
+        }
+    };
 
     // Field environment: filled values + computed fields (§7 Field).
     let fields = doc.fields()?;
@@ -320,6 +382,7 @@ pub fn layout_document_with_session(
             s.mono as u8,
         ]);
     }
+    fp.update(&[base_rtl as u8]);
     let inputs_fp = *fp.finalize().as_bytes();
 
     if let Some(s) = session.as_deref_mut() {
@@ -333,6 +396,7 @@ pub fn layout_document_with_session(
         env,
         styles,
         inputs_fp,
+        base_rtl,
         session: session.map(|s| &mut *s),
         pages: Vec::new(),
         cur: Vec::new(),
@@ -494,21 +558,42 @@ impl Engine<'_> {
         self.fragment_at(node, path, MARGIN, self.content_width())
     }
 
-    /// Layout text with this engine version's style policy.
-    fn styled_text(&self, inlines: &[vsd_core::tree::Inline]) -> crate::text::LayoutText {
-        layout_text(inlines, &self.styles, self.opts.engine.honor_styles())
+    /// Layout text with this engine version's style policy. Engine 1.2
+    /// refuses scripts it cannot lay out faithfully; earlier engines
+    /// keep their frozen `.notdef` behavior.
+    fn styled_text(&self, inlines: &[vsd_core::tree::Inline]) -> Result<crate::text::LayoutText> {
+        let lt = layout_text(inlines, &self.styles, self.opts.engine.style_policy());
+        self.check_scripts(&lt.text)?;
+        Ok(lt)
+    }
+
+    fn check_scripts(&self, text: &str) -> Result<()> {
+        if !self.opts.engine.bidi() {
+            return Ok(());
+        }
+        for c in text.chars() {
+            if let Some(what) = refused_script(c) {
+                return Err(LayoutError::Unsupported(format!(
+                    "engine {} cannot faithfully lay out {what}; \
+                     refusing rather than mis-rendering (U+{:04X})",
+                    self.opts.engine.as_str(),
+                    c as u32
+                )));
+            }
+        }
+        Ok(())
     }
 
     fn fragment_at(&self, node: &Node, path: &[u64], x: i64, width: i64) -> Result<Frag> {
         Ok(match node {
             Node::Para(p) => {
-                let lt = self.styled_text(&p.children);
-                Frag::block(self.text_atoms(&lt, SIZE_BODY, x, width, path))
+                let lt = self.styled_text(&p.children)?;
+                Frag::block(self.text_atoms(&lt, SIZE_BODY, x, width, path, true))
             }
             Node::Heading(h) => {
-                let lt = self.styled_text(&h.children);
+                let lt = self.styled_text(&h.children)?;
                 let size = SIZE_H[(h.level - 1) as usize];
-                let mut frag = Frag::block(self.text_atoms(&lt, size, x, width, path));
+                let mut frag = Frag::block(self.text_atoms(&lt, size, x, width, path, false));
                 frag.space_before = if h.level == 1 {
                     SPACE_BEFORE_H1
                 } else {
@@ -517,18 +602,18 @@ impl Engine<'_> {
                 frag.keep_with_next = true;
                 frag
             }
-            Node::Code(c) => Frag::block(self.code_atoms(&c.text, x, path)),
+            Node::Code(c) => Frag::block(self.code_atoms(&c.text, x, path)?),
             Node::Math(m) => match m.fallback {
                 Some(res) => Frag::block(vec![self.image_atom(res, x, width)?]),
-                None => Frag::block(self.code_atoms(&m.mathml, x, path)),
+                None => Frag::block(self.code_atoms(&m.mathml, x, path)?),
             },
             Node::List(l) => Frag::block(self.list_atoms(l, path, x, width)?),
             Node::Table(t) => Frag::block(self.table_atoms(t, path, x, width)?),
             Node::Figure(f) => {
                 let mut atoms = vec![self.image_atom(f.res, x, width)?];
                 if !f.caption.is_empty() {
-                    let lt = self.styled_text(&f.caption);
-                    let mut caption = self.text_atoms(&lt, SIZE_CAPTION, x, width, path);
+                    let lt = self.styled_text(&f.caption)?;
+                    let mut caption = self.text_atoms(&lt, SIZE_CAPTION, x, width, path, false);
                     if let Some(first) = caption.first_mut() {
                         for op in &mut first.ops {
                             if let Op::Text { baseline, .. } = op {
@@ -541,7 +626,7 @@ impl Engine<'_> {
                 }
                 Frag::block(atoms)
             }
-            Node::Field(f) => Frag::block(vec![self.field_atom(f, x, path)]),
+            Node::Field(f) => Frag::block(vec![self.field_atom(f, x, path)?]),
             Node::Redacted(_) => {
                 let h = FontMetrics::line_height_um(SIZE_BODY);
                 Frag::block(vec![Atom {
@@ -577,9 +662,15 @@ impl Engine<'_> {
         })
     }
 
-    /// Text block → one atom per line, runs split at link and face
-    /// boundaries. Baseline metrics always come from the Regular face
-    /// (LAYOUT-1.1.md: faces change advances, never vertical rhythm).
+    /// Text block → one atom per line, runs split at link, face,
+    /// underline, and script boundaries. Baseline metrics always come
+    /// from the Regular face (LAYOUT-1.1.md: faces change advances,
+    /// never vertical rhythm).
+    ///
+    /// Engine 1.2 (LAYOUT-1.2.md): `justify` requests full
+    /// justification (body paragraphs only); lines containing RTL
+    /// characters — or any line of a `dir=rtl` document — are ordered
+    /// by UAX #9 and never justified.
     fn text_atoms(
         &self,
         lt: &LayoutText,
@@ -587,30 +678,38 @@ impl Engine<'_> {
         x_left: i64,
         width: i64,
         path: &[u64],
+        justify: bool,
     ) -> Vec<Atom> {
         let line_h = FontMetrics::line_height_um(size_um);
         let ascent = self.font.ascent_um(size_um);
         let lines = break_lines(lt, size_um, width.max(1));
+        let bidi = if self.opts.engine.bidi() && (self.base_rtl || lt.text.chars().any(is_rtl_char))
+        {
+            Some(unicode_bidi::BidiInfo::new(
+                &lt.text,
+                Some(if self.base_rtl {
+                    unicode_bidi::Level::rtl()
+                } else {
+                    unicode_bidi::Level::ltr()
+                }),
+            ))
+        } else {
+            None
+        };
+        let justify = justify && self.opts.engine.justify();
         lines
             .iter()
-            .map(|line| {
+            .enumerate()
+            .map(|(li, line)| {
                 let mut ops = Vec::new();
-                for (s, e, is_link, face) in segment_line(line.start, line.end, lt) {
-                    let text = &lt.text[s..e];
-                    if text.is_empty() {
-                        continue;
-                    }
-                    let x = x_left + lt.width_um(line.start, s, size_um);
-                    ops.push(Op::Text {
-                        x,
-                        baseline: ascent,
-                        size_um,
-                        face,
-                        color: if is_link { LINK_BLUE } else { BLACK },
-                        text: text.to_owned(),
-                        path: path.to_vec(),
-                        range: (s as u64, e as u64),
-                    });
+                if let Some(info) = &bidi {
+                    self.emit_bidi_line(
+                        lt, line, info, size_um, x_left, width, ascent, &mut ops, path,
+                    );
+                } else {
+                    // The last line of a justified block stays ragged.
+                    let j = justify && li + 1 < lines.len();
+                    self.emit_ltr_line(lt, line, size_um, x_left, width, ascent, j, &mut ops, path);
                 }
                 Atom {
                     ops,
@@ -620,15 +719,168 @@ impl Engine<'_> {
             .collect()
     }
 
+    /// Emit one left-to-right line. With `justify`, the slack
+    /// `width − line_width` is distributed over the line's word gaps
+    /// (integer division, remainder to the leftmost gaps).
+    #[allow(clippy::too_many_arguments)]
+    fn emit_ltr_line(
+        &self,
+        lt: &LayoutText,
+        line: &Line,
+        size_um: i64,
+        x_left: i64,
+        width: i64,
+        ascent: i64,
+        justify: bool,
+        ops: &mut Vec<Op>,
+        path: &[u64],
+    ) {
+        // Word-gap bonuses: byte position of each space → extra µm.
+        let mut spaces: Vec<(usize, i64)> = Vec::new();
+        let mut boundaries: Vec<usize> = Vec::new();
+        if justify {
+            let gaps: Vec<usize> = lt.text[line.start..line.end]
+                .char_indices()
+                .filter(|&(_, c)| c == ' ')
+                .map(|(i, _)| line.start + i)
+                .collect();
+            let extra = width - line.width_um;
+            if !gaps.is_empty() && extra > 0 {
+                let n = gaps.len() as i64;
+                let (per, rem) = (extra / n, extra % n);
+                for (i, &b) in gaps.iter().enumerate() {
+                    spaces.push((b, per + i64::from((i as i64) < rem)));
+                    // Runs split after each gap so the bonus shifts the
+                    // rest of the line.
+                    boundaries.push(b + 1);
+                }
+            }
+        }
+        let bonus_before = |b: usize| -> i64 {
+            spaces
+                .iter()
+                .filter(|&&(sb, _)| sb < b)
+                .map(|&(_, x)| x)
+                .sum()
+        };
+        for (s, e, is_link, face, underline) in
+            segment_line_with(line.start, line.end, lt, &boundaries)
+        {
+            let text = &lt.text[s..e];
+            if text.is_empty() {
+                continue;
+            }
+            let x = x_left + lt.width_um(line.start, s, size_um) + bonus_before(s);
+            let color = if is_link { LINK_BLUE } else { BLACK };
+            ops.push(Op::Text {
+                x,
+                baseline: ascent,
+                size_um,
+                face,
+                color,
+                rtl: false,
+                text: text.to_owned(),
+                path: path.to_vec(),
+                range: (s as u64, e as u64),
+            });
+            if underline {
+                // The rect runs to the segment's visual end, so a
+                // justified gap inside an underlined range stays solid.
+                let x_end = x_left + lt.width_um(line.start, e, size_um) + bonus_before(e);
+                ops.push(Op::Rect {
+                    x,
+                    y: ascent,
+                    w: x_end - x,
+                    h: RULE,
+                    color,
+                });
+            }
+        }
+    }
+
+    /// Emit one line in UAX #9 visual order. The line box is
+    /// right-aligned when the document base direction is RTL; within
+    /// the line, runs are placed left-to-right in visual order and RTL
+    /// runs carry the display list's `rtl` flag (logical-order text,
+    /// drawn right-to-left from the run's left edge).
+    #[allow(clippy::too_many_arguments)]
+    fn emit_bidi_line(
+        &self,
+        lt: &LayoutText,
+        line: &Line,
+        info: &unicode_bidi::BidiInfo,
+        size_um: i64,
+        x_left: i64,
+        width: i64,
+        ascent: i64,
+        ops: &mut Vec<Op>,
+        path: &[u64],
+    ) {
+        // The layout text is whitespace-collapsed (no newlines), so
+        // there is exactly one bidi paragraph.
+        let para = &info.paragraphs[0];
+        let (levels, runs) = info.visual_runs(para, line.start..line.end);
+        let mut cursor = if self.base_rtl {
+            x_left + (width - line.width_um).max(0)
+        } else {
+            x_left
+        };
+        for run in runs {
+            let run_rtl = levels[run.start].is_rtl();
+            let mut segs = segment_line(run.start, run.end, lt);
+            if run_rtl {
+                // Visual order within an RTL run is reversed.
+                segs.reverse();
+            }
+            for (s, e, is_link, face, underline) in segs {
+                if s >= e {
+                    continue;
+                }
+                let w = lt.width_um(s, e, size_um);
+                let color = if is_link { LINK_BLUE } else { BLACK };
+                ops.push(Op::Text {
+                    x: cursor,
+                    baseline: ascent,
+                    size_um,
+                    face,
+                    color,
+                    rtl: run_rtl,
+                    text: lt.text[s..e].to_owned(),
+                    path: path.to_vec(),
+                    range: (s as u64, e as u64),
+                });
+                if underline {
+                    ops.push(Op::Rect {
+                        x: cursor,
+                        y: ascent,
+                        w,
+                        h: RULE,
+                        color,
+                    });
+                }
+                cursor += w;
+            }
+        }
+    }
+
     /// Code block → verbatim lines; tabs advance to 4-space stops.
-    fn code_atoms(&self, text: &str, x_left: i64, path: &[u64]) -> Vec<Atom> {
+    /// Engine 1.2 sets code in the pinned mono face (advances measured
+    /// in mono; baselines stay on the Regular rhythm).
+    fn code_atoms(&self, text: &str, x_left: i64, path: &[u64]) -> Result<Vec<Atom>> {
+        self.check_scripts(text)?;
         let size = SIZE_CODE;
+        let face = if self.opts.engine.mono_code() {
+            Face::Mono
+        } else {
+            Face::Regular
+        };
+        let metrics = FontMetrics::face_metrics(face);
         let line_h = FontMetrics::line_height_um(size);
         let ascent = self.font.ascent_um(size);
         let mut atoms = Vec::new();
         let mut offset = 0usize;
         for line in text.split('\n') {
-            let (segments, _) = measure_code_line(self.font, line, size);
+            let (segments, _) = measure_code_line(metrics, line, size);
             let ops = segments
                 .into_iter()
                 .filter(|&(s, e, _)| s < e)
@@ -636,8 +888,9 @@ impl Engine<'_> {
                     x: x_left + seg_x,
                     baseline: ascent,
                     size_um: size,
-                    face: Face::Regular,
+                    face,
                     color: BLACK,
+                    rtl: false,
                     text: line[s..e].to_owned(),
                     path: path.to_vec(),
                     range: ((offset + s) as u64, (offset + e) as u64),
@@ -649,7 +902,7 @@ impl Engine<'_> {
             });
             offset += line.len() + 1;
         }
-        atoms
+        Ok(atoms)
     }
 
     /// Stack child blocks without pagination (cells, list items, nested
@@ -708,6 +961,7 @@ impl Engine<'_> {
                 size_um: SIZE_BODY,
                 face: Face::Regular,
                 color: BLACK,
+                rtl: false,
                 text: label,
                 path: path.to_vec(),
                 range: (0, 0),
@@ -868,6 +1122,7 @@ fn offset_op(op: Op, dy: i64) -> Op {
             size_um,
             face,
             color,
+            rtl,
             text,
             path,
             range,
@@ -877,6 +1132,7 @@ fn offset_op(op: Op, dy: i64) -> Op {
             size_um,
             face,
             color,
+            rtl,
             text,
             path,
             range,
@@ -898,9 +1154,23 @@ fn offset_op(op: Op, dy: i64) -> Op {
     }
 }
 
-/// Split a line's byte range into (start, end, is_link, face) segments
-/// at every link and face boundary.
-fn segment_line(start: usize, end: usize, lt: &LayoutText) -> Vec<(usize, usize, bool, Face)> {
+/// Split a line's byte range into (start, end, is_link, face,
+/// underline) segments at every link, face, underline, and script
+/// boundary, so each segment is drawable as one homogeneous run.
+fn segment_line(
+    start: usize,
+    end: usize,
+    lt: &LayoutText,
+) -> Vec<(usize, usize, bool, Face, bool)> {
+    segment_line_with(start, end, lt, &[])
+}
+
+fn segment_line_with(
+    start: usize,
+    end: usize,
+    lt: &LayoutText,
+    extra: &[usize],
+) -> Vec<(usize, usize, bool, Face, bool)> {
     let mut bounds = vec![start, end];
     let push_range = |s: usize, e: usize, bounds: &mut Vec<usize>| {
         if s > start && s < end {
@@ -916,6 +1186,28 @@ fn segment_line(start: usize, end: usize, lt: &LayoutText) -> Vec<(usize, usize,
     for &(s, e, _) in &lt.faces {
         push_range(s, e, &mut bounds);
     }
+    for &(s, e) in &lt.underlines {
+        push_range(s, e, &mut bounds);
+    }
+    for &b in extra {
+        if b > start && b < end {
+            bounds.push(b);
+        }
+    }
+    // Script fallback (1.2): a run carries one face index, so split at
+    // every transition in or out of a fallback script.
+    if lt.script_fallback {
+        let mut prev: Option<Face> = None;
+        for (off, c) in lt.text[start..end].char_indices() {
+            let f = lt.face_for(start + off, c);
+            if let Some(p) = prev {
+                if f != p {
+                    bounds.push(start + off);
+                }
+            }
+            prev = Some(f);
+        }
+    }
     bounds.sort_unstable();
     bounds.dedup();
     bounds
@@ -923,7 +1215,12 @@ fn segment_line(start: usize, end: usize, lt: &LayoutText) -> Vec<(usize, usize,
         .map(|w| {
             let (s, e) = (w[0], w[1]);
             let is_link = lt.links.iter().any(|&(ls, le)| s >= ls && e <= le);
-            (s, e, is_link, lt.face_at(s))
+            let underline = lt.underlines.iter().any(|&(us, ue)| s >= us && e <= ue);
+            let face = match lt.text[s..e].chars().next() {
+                Some(c) => lt.face_for(s, c),
+                None => lt.face_at(s),
+            };
+            (s, e, is_link, face, underline)
         })
         .collect()
 }
@@ -952,7 +1249,7 @@ impl Engine<'_> {
         })
     }
 
-    fn field_atom(&self, f: &vsd_core::tree::Field, x: i64, path: &[u64]) -> Atom {
+    fn field_atom(&self, f: &vsd_core::tree::Field, x: i64, path: &[u64]) -> Result<Atom> {
         let size = SIZE_BODY;
         let ascent = self.font.ascent_um(size);
         let line_h = FontMetrics::line_height_um(size);
@@ -964,6 +1261,7 @@ impl Engine<'_> {
             size_um: size,
             face: Face::Regular,
             color: BLACK,
+            rtl: false,
             text: label,
             path: path.to_vec(),
             range: (0, 0),
@@ -978,21 +1276,24 @@ impl Engine<'_> {
                 color: BLACK,
             });
         } else {
+            let text = value.to_text();
+            self.check_scripts(&text)?;
             ops.push(Op::Text {
                 x: x + label_w,
                 baseline: ascent,
                 size_um: size,
                 face: Face::Regular,
                 color: BLACK,
-                text: value.to_text(),
+                rtl: false,
+                text,
                 path: path.to_vec(),
                 range: (0, 0),
             });
         }
-        Atom {
+        Ok(Atom {
             ops,
             height: line_h,
-        }
+        })
     }
 }
 
@@ -1017,18 +1318,38 @@ mod tests {
             text: "0123456789".into(),
             links: vec![(2, 5)],
             faces: vec![(7, 9, Face::Bold)],
+            underlines: vec![],
+            script_fallback: false,
         };
         let segs = segment_line(0, 10, &lt);
         assert_eq!(
             segs,
             vec![
-                (0, 2, false, Face::Regular),
-                (2, 5, true, Face::Regular),
-                (5, 7, false, Face::Regular),
-                (7, 9, false, Face::Bold),
-                (9, 10, false, Face::Regular),
+                (0, 2, false, Face::Regular, false),
+                (2, 5, true, Face::Regular, false),
+                (5, 7, false, Face::Regular, false),
+                (7, 9, false, Face::Bold, false),
+                (9, 10, false, Face::Regular, false),
             ]
         );
+    }
+
+    #[test]
+    fn segment_line_splits_on_underlines_and_scripts() {
+        let lt = LayoutText {
+            text: "ab שלום cd".into(),
+            links: vec![],
+            faces: vec![],
+            underlines: vec![(0, 2)],
+            script_fallback: true,
+        };
+        let segs = segment_line(0, lt.text.len(), &lt);
+        // "ab" underlined; " " regular; "שלום" Hebrew face; " cd" regular.
+        assert_eq!(segs[0], (0, 2, false, Face::Regular, true));
+        assert_eq!(segs[1], (2, 3, false, Face::Regular, false));
+        assert_eq!(segs[2].3, Face::Hebrew);
+        assert_eq!(&lt.text[segs[2].0..segs[2].1], "שלום");
+        assert_eq!(segs[3].3, Face::Regular);
     }
 
     #[test]

@@ -135,6 +135,22 @@ fn gen_vectors() -> Result<()> {
         "note": "engine 1.1: bold/italic faces honored from the style table (LAYOUT-1.1.md); runs carry face indices",
     }));
 
+    let widened = widened_doc()?;
+    let opts_12 = vsd_layout::LayoutOptions::default().with_engine(vsd_layout::EngineVersion::V1_2);
+    let laid_12 = vsd_layout::add_render_cache(&widened, &opts_12)?;
+    let laid_12_bytes = write_document(&laid_12, &[], &WriteOptions { compress: false })?;
+    write(&valid.join("laid-out-1.2.vsd"), &laid_12_bytes)?;
+    let cache_12 = laid_12.render_cache()?.expect("cache present");
+    valid_entries.push(json!({
+        "file": "valid/laid-out-1.2.vsd",
+        "doc_id": laid_12.document_id()?.to_hex(),
+        "profile": "core",
+        "layout_engine": "vsd-layout/1.2.0",
+        "layout_hash": hex::encode(cache_12.layout_hash),
+        "layout_pages": cache_12.pages.len(),
+        "note": "engine 1.2: mono + underline + justified body text + Hebrew bidi (LAYOUT-1.2.md); RTL runs carry the format-0.3 rtl flag with logical-order text",
+    }));
+
     let (redacted, predecessor_id, proof) = redacted_doc()?;
     let red_bytes = write_document(&redacted, &[], &WriteOptions { compress: false })?;
     write(&valid.join("redacted.vsd"), &red_bytes)?;
@@ -405,6 +421,76 @@ fn styled_doc() -> Result<Document> {
         .resources(ResourceTable {
             entries: vec![],
             styles: vec![style(true, false), style(false, true), style(true, true)],
+        })
+        .build()?)
+}
+
+/// A document exercising engine 1.2's widened typography: mono and
+/// underline spans, a mono code block, a justified body paragraph, and
+/// Hebrew (RTL, per-script face fallback) under an LTR base direction.
+fn widened_doc() -> Result<Document> {
+    use vsd_core::manifest::Style;
+    use vsd_core::tree::{Code, Span};
+
+    let root = Node::Doc(Doc {
+        lang: "en".into(),
+        dir: Direction::Ltr,
+        children: vec![
+            Node::Heading(Heading {
+                level: 1,
+                children: vec![Inline::Text("Engine 1.2 typography".into())],
+            }),
+            Node::Para(Para {
+                children: vec![Inline::Text(
+                    "This body paragraph is long enough to wrap across several lines \
+                     so that full justification is observable: every line but the \
+                     last must end flush at the right content edge, with the slack \
+                     distributed across the word gaps in integer micrometers."
+                        .into(),
+                )],
+            }),
+            Node::Para(Para {
+                children: vec![
+                    Inline::Text("Call ".into()),
+                    Inline::Span(Span {
+                        style: Some(0),
+                        children: vec![Inline::Text("vsd_verify()".into())],
+                    }),
+                    Inline::Text(" with an ".into()),
+                    Inline::Span(Span {
+                        style: Some(1),
+                        children: vec![Inline::Text("underlined warning".into())],
+                    }),
+                    Inline::Text(" and the greeting שלום עולם ends it.".into()),
+                ],
+            }),
+            Node::Code(Code {
+                lang: Some("rust".into()),
+                text: "fn main() {\n\tprintln!(\"hi\");\n}".into(),
+            }),
+        ],
+    });
+    Ok(DocumentBuilder::new(root)
+        .metadata(Metadata {
+            title: Some("VSD conformance: engine 1.2 typography".into()),
+            ..Default::default()
+        })
+        .resources(ResourceTable {
+            entries: vec![],
+            styles: vec![
+                Style {
+                    bold: false,
+                    italic: false,
+                    underline: false,
+                    mono: true,
+                },
+                Style {
+                    bold: false,
+                    italic: false,
+                    underline: true,
+                    mono: false,
+                },
+            ],
         })
         .build()?)
 }

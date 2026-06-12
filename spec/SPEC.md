@@ -1,6 +1,6 @@
 # VSD — Verifiable Structured Document
 
-## Format Specification, version 0.2 (1.0-track draft)
+## Format Specification, version 0.3 (1.0-track draft)
 
 **License:** This specification is published under [CC-BY 4.0](https://creativecommons.org/licenses/by/4.0/).
 The reference implementation is Apache-2.0.
@@ -175,9 +175,13 @@ render-cache = {
 
 Pages are flat display lists: `{"t":"page","w","h","ops":[op]}` with
 ops `text` (x, y baseline, font uint, size pt, color RGBA bytes4, text,
-`src` node path, `range` byte range into the block's layout text),
-`image` (x,y,w,h,res), `rect` (x,y,w,h,fill). Positions are mm floats
-produced by exact integer→float conversion (see the layout contract).
+`src` node path, `range` byte range into the block's layout text, and —
+added in 0.3 — an optional `rtl` bool: the run's `text` is stored in
+logical order and consumers draw its glyphs right-to-left starting at
+`x`, the run's left edge; omitted when false, so pre-0.3 pages decode
+unchanged), `image` (x,y,w,h,res), `rect` (x,y,w,h,fill). Positions are
+mm floats produced by exact integer→float conversion (see the layout
+contract).
 
 Verification levels: (1) structural — `layout-hash` matches the page
 list, pages decode; (2) **recomputation** — re-run the named engine *at
@@ -186,8 +190,11 @@ cache that displays anything other than the tree's content cannot
 survive (2). Engine versions are immutable contracts: once shipped,
 their output never changes, so old caches stay verifiable forever.
 Reference contracts: `vsd-layout/1.0.0`
-([docs/LAYOUT-1.0.md](../docs/LAYOUT-1.0.md)) and `vsd-layout/1.1.0`
-([docs/LAYOUT-1.1.md](../docs/LAYOUT-1.1.md), adds bold/italic faces).
+([docs/LAYOUT-1.0.md](../docs/LAYOUT-1.0.md)), `vsd-layout/1.1.0`
+([docs/LAYOUT-1.1.md](../docs/LAYOUT-1.1.md), adds bold/italic faces),
+and `vsd-layout/1.2.0` ([docs/LAYOUT-1.2.md](../docs/LAYOUT-1.2.md),
+adds monospace, underline, justification, and Hebrew bidi; refuses
+scripts it cannot set faithfully).
 
 ## 8. (reserved)
 
@@ -325,7 +332,8 @@ majors. Minor bumps are additive (new node types, new algorithm
 strings); strict readers of an older minor will reject documents using
 newer constructs — by design, never mis-render. History: 0.1 initial;
 0.2 added `salted` (§11.2) and `field-layer` (§9.2),
-`hybrid-ed25519-ml-dsa-65` (§10.2).
+`hybrid-ed25519-ml-dsa-65` (§10.2); 0.3 added the `rtl` flag on `text`
+display ops (§7).
 
 ## 16. Registries
 

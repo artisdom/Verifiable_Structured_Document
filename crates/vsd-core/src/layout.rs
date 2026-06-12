@@ -49,6 +49,11 @@ pub enum DisplayOp {
         text: String,
         node_path: Vec<u64>,
         char_range: (u64, u64),
+        /// Right-to-left run (format 0.3): `text` is stored in logical
+        /// order; consumers draw its glyphs right-to-left starting at
+        /// `x` (the run's left edge). Omitted from the encoding when
+        /// false, so pre-0.3 pages decode unchanged.
+        rtl: bool,
     },
     /// Raster or vector resource placement.
     Image {
@@ -83,6 +88,7 @@ impl Page {
                     text,
                     node_path,
                     char_range,
+                    rtl,
                 } => MapBuilder::new()
                     .put("op", Value::text("text"))
                     .put("x", Value::Float(*x))
@@ -102,6 +108,7 @@ impl Page {
                             Value::Unsigned(char_range.1),
                         ]),
                     )
+                    .put_opt("rtl", if *rtl { Some(Value::Bool(true)) } else { None })
                     .build(),
                 DisplayOp::Image { x, y, w, h, res } => MapBuilder::new()
                     .put("op", Value::text("image"))
@@ -190,6 +197,7 @@ impl Page {
                                     .as_u64()
                                     .ok_or_else(|| Error::Schema("text op: bad range".into()))?,
                             ),
+                            rtl: op.get("rtl").and_then(Value::as_bool).unwrap_or(false),
                         }
                     }
                     Some("image") => DisplayOp::Image {

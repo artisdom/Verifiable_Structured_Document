@@ -245,6 +245,7 @@ fn page_content(
                 font,
                 size_pt,
                 color,
+                rtl,
                 text,
                 node_path,
                 ..
@@ -252,8 +253,16 @@ fn page_content(
                 let face = Face::from_index(*font);
                 let metrics = FontMetrics::face_metrics(face);
                 let tag = struct_tag(doc, root, node_path);
+                // PDF content streams are visual-order: an RTL run's
+                // glyphs are written in reversed logical order from the
+                // run's left edge (format 0.3 TextRun semantics).
+                let chars: Vec<char> = if *rtl {
+                    text.chars().rev().collect()
+                } else {
+                    text.chars().collect()
+                };
                 let mut hexes = String::with_capacity(text.len() * 4);
-                for c in text.chars().filter(|c| !c.is_control()) {
+                for c in chars.into_iter().filter(|c| !c.is_control()) {
                     let _ = write!(hexes, "{:04x}", metrics.glyph(c).0);
                 }
                 let _ = writeln!(

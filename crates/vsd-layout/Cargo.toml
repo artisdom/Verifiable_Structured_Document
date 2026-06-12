@@ -1,6 +1,6 @@
 [package]
 name = "vsd-layout"
-description = "Reference layout engine for VSD (vsd-layout/1.0): a deterministic projection from content tree to display lists, per docs/LAYOUT-1.0.md."
+description = "Reference layout engine for VSD (versions 1.0/1.1/1.2, each an immutable contract): a deterministic projection from content tree to display lists, per docs/LAYOUT-1.x.md."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -13,8 +13,10 @@ categories.workspace = true
 [dependencies]
 vsd-core = { workspace = true, features = ["std"] }
 blake3 = { workspace = true, features = ["std"] }
-# Exact pin: the metrics parser is part of the determinism contract.
+# Exact pins: the metrics parser and the UAX #9 implementation are
+# part of the determinism contract.
 ttf-parser = "=0.25.1"
+unicode-bidi = "=0.3.18"
 thiserror = { workspace = true, features = ["std"] }
 
 [package.metadata.docs.rs]

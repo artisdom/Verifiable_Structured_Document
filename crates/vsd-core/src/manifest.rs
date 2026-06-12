@@ -11,8 +11,9 @@ use crate::error::{Error, Result};
 use crate::object::ObjectId;
 
 /// Format version written into new manifests. Minor 2 added the
-/// `salted` node type (additive within major 0; readers gate on major).
-pub const VSD_VERSION: (u16, u16) = (0, 2);
+/// `salted` node type; minor 3 added the `rtl` flag on display-list
+/// text runs (additive within major 0; readers gate on major).
+pub const VSD_VERSION: (u16, u16) = (0, 3);
 
 /// Conformance profile (spec §10).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

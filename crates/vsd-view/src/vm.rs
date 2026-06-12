@@ -105,6 +105,7 @@ pub fn page_highlights(page: &Page, query: &str) -> Vec<Highlight> {
             y,
             font,
             size_pt,
+            rtl,
             text,
             ..
         } = op
@@ -122,10 +123,20 @@ pub fn page_highlights(page: &Page, query: &str) -> Vec<Highlight> {
             if text.is_char_boundary(start) && text.is_char_boundary(end) {
                 let ascent_mm = m.ascent_units as f64 * size_pt / m.upem as f64 * PT_TO_MM;
                 let descent_mm = -m.descent_units as f64 * size_pt / m.upem as f64 * PT_TO_MM;
+                let w_mm = text_width_mm(&text[start..end], *size_pt, face);
+                // RTL runs draw right-to-left from `x`: a logical
+                // prefix sits at the run's right edge, so mirror.
+                let x_mm = if *rtl {
+                    let run_w = text_width_mm(text, *size_pt, face);
+                    let prefix_w = text_width_mm(&text[..start], *size_pt, face);
+                    x + run_w - prefix_w - w_mm
+                } else {
+                    x + text_width_mm(&text[..start], *size_pt, face)
+                };
                 out.push(Highlight {
-                    x_mm: x + text_width_mm(&text[..start], *size_pt, face),
+                    x_mm,
                     y_mm: y - ascent_mm,
-                    w_mm: text_width_mm(&text[start..end], *size_pt, face),
+                    w_mm,
                     h_mm: ascent_mm + descent_mm,
                 });
             }
