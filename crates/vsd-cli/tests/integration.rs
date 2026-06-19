@@ -914,7 +914,7 @@ fn engine_1_2_widened_typography() {
     use vsd_core::layout::DisplayOp;
     use vsd_core::manifest::Style;
     use vsd_core::tree::Span;
-    use vsd_layout::LayoutOptions;
+    use vsd_layout::{EngineVersion, LayoutOptions};
 
     let root = Node::Doc(Doc {
         lang: "en".into(),
@@ -962,8 +962,8 @@ fn engine_1_2_widened_typography() {
         .build()
         .unwrap();
 
-    // Default options are engine 1.2.
-    let opts = LayoutOptions::default();
+    // This test pins engine 1.2 specifically (the default is newer).
+    let opts = LayoutOptions::default().with_engine(EngineVersion::V1_2);
     assert_eq!(opts.engine.as_str(), "1.2.0");
     let pages = vsd_layout::layout_document(&doc, &opts).unwrap();
     let runs: Vec<(&u64, &bool, &String)> = pages
@@ -1256,5 +1256,189 @@ fn subtree_signature_scope() {
     assert_eq!(
         vsd_sign::verify(&redacted, &subtree_sig).unwrap(),
         vsd_sign::Verdict::ValidForOtherTarget
+    );
+}
+
+/// Engine 1.3 (LAYOUT-1.3.md): English body text is hyphenated with the
+/// pinned Knuth–Liang patterns; the inserted hyphen is decoration (an
+/// empty char_range), language-gated, and the cache pins 1.3.0 and
+/// recomputes byte-identically. The 1.0/1.1/1.2 contracts are untouched.
+#[test]
+fn engine_1_3_hyphenates_english_body_only() {
+    use vsd_core::layout::DisplayOp;
+    use vsd_layout::{EngineVersion, LayoutOptions, RecomputeOutcome};
+
+    // A long word-heavy paragraph and a narrow page force breaks.
+    let prose = "Internationalization and the establishment of comprehensive \
+                 documentation standards require extraordinarily collaborative \
+                 organizations working methodically toward interoperability."
+        .to_string();
+    let make = |lang: &str| {
+        DocumentBuilder::new(Node::Doc(Doc {
+            lang: lang.into(),
+            dir: Direction::Ltr,
+            children: vec![Node::Para(Para {
+                children: vec![Inline::Text(prose.clone())],
+            })],
+        }))
+        .build()
+        .unwrap()
+    };
+    // Narrow A6-ish page so long words must hyphenate.
+    let opts = LayoutOptions {
+        page_width_um: 90_000,
+        ..LayoutOptions::default()
+    };
+    assert_eq!(opts.engine.as_str(), "1.3.0");
+
+    let en = make("en");
+    let pages = vsd_layout::layout_document(&en, &opts).unwrap();
+    let hyphens: Vec<&DisplayOp> = pages
+        .iter()
+        .flat_map(|p| &p.ops)
+        .filter(|op| matches!(op, DisplayOp::TextRun { text, .. } if text == "-"))
+        .collect();
+    assert!(
+        !hyphens.is_empty(),
+        "English body must hyphenate at this width"
+    );
+    // Every inserted hyphen carries an empty char_range (decoration, so
+    // copy/extraction can drop it) and is not RTL.
+    for op in &hyphens {
+        if let DisplayOp::TextRun {
+            char_range, rtl, ..
+        } = op
+        {
+            assert_eq!(char_range.0, char_range.1, "hyphen range must be empty");
+            assert!(!rtl);
+        }
+    }
+
+    // Language gating: German shares the Latin font but not the en-US
+    // patterns, so it is laid out without hyphenation (no invented break).
+    let de = make("de");
+    let de_pages = vsd_layout::layout_document(&de, &opts).unwrap();
+    assert!(
+        de_pages
+            .iter()
+            .flat_map(|p| &p.ops)
+            .all(|op| !matches!(op, DisplayOp::TextRun { text, .. } if text == "-")),
+        "non-English text must not be hyphenated by the en-US patterns"
+    );
+
+    // The cache pins 1.3.0 and recomputes byte-identically.
+    let laid = vsd_layout::add_render_cache(&en, &opts).unwrap();
+    assert_eq!(
+        laid.render_cache().unwrap().unwrap().engine_version,
+        "1.3.0"
+    );
+    assert!(matches!(
+        vsd_layout::verify_render_cache(&laid).unwrap(),
+        RecomputeOutcome::Match { .. }
+    ));
+
+    // The frozen contracts are unchanged: 1.2 lays this document out
+    // without hyphenation, so its cache differs from 1.3's — and both
+    // still recompute-verify under their pinned versions.
+    let laid_12 =
+        vsd_layout::add_render_cache(&en, &opts.with_engine(EngineVersion::V1_2)).unwrap();
+    assert_ne!(
+        laid.render_cache().unwrap().unwrap().layout_hash,
+        laid_12.render_cache().unwrap().unwrap().layout_hash,
+    );
+    assert!(matches!(
+        vsd_layout::verify_render_cache(&laid_12).unwrap(),
+        RecomputeOutcome::Match { .. }
+    ));
+}
+
+/// Engine 1.3 widow/orphan control: no page break strands a single line
+/// of a paragraph. On a doc whose paragraphs straddle short pages, the
+/// 1.3 layout differs from 1.2's (the control acted) and satisfies the
+/// "≥2 lines on each side of a break" invariant on every paragraph.
+#[test]
+fn engine_1_3_widow_orphan_keeps_two_lines_together() {
+    use std::collections::BTreeMap;
+    use vsd_core::layout::DisplayOp;
+    use vsd_layout::{EngineVersion, LayoutOptions};
+
+    // Eight paragraphs that each wrap to exactly two lines at the A4
+    // measure (≈120 chars > one 170 mm line, < two). Body line height is
+    // 5433 µm and the margin 20000 µm (frozen 1.0 constants), so a
+    // 60 mm page (limit 40000 µm) holds the first paragraph's two lines
+    // plus only the first line of the next — forcing a 1/1 split under
+    // greedy pagination. Language is non-English to isolate widow/orphan
+    // from hyphenation.
+    let line2 = "This paragraph is written to be long enough that it wraps onto a \
+                 second line at the default page measure here.";
+    assert!(
+        line2.len() > 90 && line2.len() < 170,
+        "must wrap to two lines"
+    );
+    let children: Vec<Node> = (0..8)
+        .map(|_| {
+            Node::Para(Para {
+                children: vec![Inline::Text(line2.into())],
+            })
+        })
+        .collect();
+    let doc = DocumentBuilder::new(Node::Doc(Doc {
+        lang: "fr".into(),
+        dir: Direction::Ltr,
+        children,
+    }))
+    .build()
+    .unwrap();
+    let opts = LayoutOptions {
+        page_height_um: 60_000, // limit = 40000 µm: two lines + one stranded
+        ..LayoutOptions::default()
+    };
+
+    // Line counts per paragraph (node_path) per page, in page order.
+    let per_para = |engine| {
+        let pages = vsd_layout::layout_document(&doc, &opts.with_engine(engine)).unwrap();
+        // node_path -> page_index -> set of distinct baselines (lines).
+        let mut m: BTreeMap<Vec<u64>, BTreeMap<usize, std::collections::BTreeSet<i64>>> =
+            BTreeMap::new();
+        for (pi, page) in pages.iter().enumerate() {
+            for op in &page.ops {
+                if let DisplayOp::TextRun { y, node_path, .. } = op {
+                    m.entry(node_path.clone())
+                        .or_default()
+                        .entry(pi)
+                        .or_default()
+                        .insert((y * 1000.0).round() as i64);
+                }
+            }
+        }
+        // Collapse to per-paragraph ordered line counts across pages.
+        m.into_iter()
+            .map(|(path, by_page)| {
+                let counts: Vec<usize> = by_page.values().map(|ys| ys.len()).collect();
+                (path, counts)
+            })
+            .collect::<BTreeMap<_, _>>()
+    };
+
+    let v13 = per_para(EngineVersion::V1_3);
+    // The invariant: any paragraph split across pages keeps ≥2 lines on
+    // both the first and the last page it touches.
+    for (path, counts) in &v13 {
+        if counts.len() >= 2 {
+            assert!(
+                *counts.first().unwrap() >= 2 && *counts.last().unwrap() >= 2,
+                "widow/orphan violated at {path:?}: {counts:?}"
+            );
+        }
+    }
+    // The control actually acted: 1.2 leaves at least one stranded line
+    // that 1.3 does not.
+    let v12 = per_para(EngineVersion::V1_2);
+    let v12_strands = v12
+        .values()
+        .any(|c| c.len() >= 2 && (*c.first().unwrap() == 1 || *c.last().unwrap() == 1));
+    assert!(
+        v12_strands,
+        "expected engine 1.2 to strand a line so 1.3 can be shown to fix it"
     );
 }

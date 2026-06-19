@@ -12,7 +12,8 @@ use vsd_core::manifest::Blob;
 use vsd_core::tree::{Node, Row, Table};
 
 use crate::font::{muldiv, Face, FontMetrics};
-use crate::text::{break_lines, layout_text, measure_code_line, LayoutText, Line};
+use crate::hyphen::Hyphenator;
+use crate::text::{break_lines_hyphenated, layout_text, measure_code_line, LayoutText, Line};
 use crate::{LayoutError, Result};
 
 // --- Normative constants (LAYOUT-1.0.md §6) --------------------------------
@@ -51,6 +52,10 @@ pub enum EngineVersion {
     /// non-joining scripts (Hebrew). Joining scripts and CJK are
     /// refused, never mis-rendered.
     V1_2,
+    /// LAYOUT-1.3.md — page furniture: Knuth–Liang hyphenation of
+    /// English body text (pinned en-US patterns) and widow/orphan
+    /// control in pagination. Everything else identical to 1.2.
+    V1_3,
 }
 
 impl EngineVersion {
@@ -59,6 +64,7 @@ impl EngineVersion {
             EngineVersion::V1_0 => "1.0.0",
             EngineVersion::V1_1 => "1.1.0",
             EngineVersion::V1_2 => "1.2.0",
+            EngineVersion::V1_3 => "1.3.0",
         }
     }
 
@@ -67,6 +73,7 @@ impl EngineVersion {
             "1.0.0" => Some(EngineVersion::V1_0),
             "1.1.0" => Some(EngineVersion::V1_1),
             "1.2.0" => Some(EngineVersion::V1_2),
+            "1.3.0" => Some(EngineVersion::V1_3),
             _ => None,
         }
     }
@@ -75,20 +82,29 @@ impl EngineVersion {
         match self {
             EngineVersion::V1_0 => crate::text::StylePolicy::V1_0,
             EngineVersion::V1_1 => crate::text::StylePolicy::V1_1,
-            EngineVersion::V1_2 => crate::text::StylePolicy::V1_2,
+            // 1.3 adds no new style flags; it reuses the 1.2 policy.
+            EngineVersion::V1_2 | EngineVersion::V1_3 => crate::text::StylePolicy::V1_2,
         }
     }
 
     fn justify(self) -> bool {
-        self == EngineVersion::V1_2
+        matches!(self, EngineVersion::V1_2 | EngineVersion::V1_3)
     }
 
     fn bidi(self) -> bool {
-        self == EngineVersion::V1_2
+        matches!(self, EngineVersion::V1_2 | EngineVersion::V1_3)
     }
 
     fn mono_code(self) -> bool {
-        self == EngineVersion::V1_2
+        matches!(self, EngineVersion::V1_2 | EngineVersion::V1_3)
+    }
+
+    fn hyphenate(self) -> bool {
+        self == EngineVersion::V1_3
+    }
+
+    fn widow_orphan(self) -> bool {
+        self == EngineVersion::V1_3
     }
 }
 
@@ -132,7 +148,7 @@ impl Default for LayoutOptions {
         LayoutOptions {
             page_width_um: 210_000,
             page_height_um: 297_000,
-            engine: EngineVersion::V1_2,
+            engine: EngineVersion::V1_3,
         }
     }
 }
@@ -254,6 +270,9 @@ struct Frag {
     keep_with_next: bool,
     /// Page-break hint.
     force_break: bool,
+    /// The atoms are consecutive text lines of one paragraph, so
+    /// widow/orphan control (engine 1.3) applies when paginating them.
+    text_lines: bool,
 }
 
 impl Frag {
@@ -264,6 +283,7 @@ impl Frag {
             atoms: Vec::new(),
             keep_with_next: false,
             force_break: false,
+            text_lines: false,
         }
     }
 
@@ -274,6 +294,7 @@ impl Frag {
             atoms,
             keep_with_next: false,
             force_break: false,
+            text_lines: false,
         }
     }
 
@@ -321,6 +342,9 @@ pub(crate) struct Engine<'a> {
     inputs_fp: [u8; 32],
     /// Document base direction is right-to-left (engine 1.2+).
     base_rtl: bool,
+    /// Document language is English — gates hyphenation (engine 1.3),
+    /// whose pinned patterns are en-US.
+    lang_en: bool,
     session: Option<&'a mut LayoutSession>,
     pages: Vec<Page>,
     cur: Vec<DisplayOp>,
@@ -364,6 +388,8 @@ pub fn layout_document_with_session(
     };
     let env = vsd_core::forms::evaluate_computed(&fields, &inputs)?;
     let styles = doc.resources()?.styles;
+    // Hyphenation is language-gated; the pinned patterns are en-US.
+    let lang_en = d.lang.to_ascii_lowercase().starts_with("en");
 
     // Inputs fingerprint: anything besides the block bytes that can
     // change fragmentation must invalidate cache entries.
@@ -382,7 +408,7 @@ pub fn layout_document_with_session(
             s.mono as u8,
         ]);
     }
-    fp.update(&[base_rtl as u8]);
+    fp.update(&[base_rtl as u8, lang_en as u8]);
     let inputs_fp = *fp.finalize().as_bytes();
 
     if let Some(s) = session.as_deref_mut() {
@@ -397,6 +423,7 @@ pub fn layout_document_with_session(
         styles,
         inputs_fp,
         base_rtl,
+        lang_en,
         session: session.map(|s| &mut *s),
         pages: Vec::new(),
         cur: Vec::new(),
@@ -537,6 +564,13 @@ impl Engine<'_> {
             }
         }
 
+        // Widow/orphan control (engine 1.3): paginate paragraph lines so
+        // a page break never strands a single line.
+        if self.opts.engine.widow_orphan() && frag.text_lines && frag.atoms.len() >= 2 {
+            self.place_text_lines(frag, gap);
+            return;
+        }
+
         for atom in frag.atoms {
             if !self.page_top && self.y + gap + atom.height > self.limit() {
                 self.new_page();
@@ -549,6 +583,72 @@ impl Engine<'_> {
                 .extend(atom.ops.into_iter().map(|op| op.finalize(y)));
             self.y += atom.height;
             self.page_top = false;
+        }
+        self.prev_after = frag.space_after;
+    }
+
+    /// Place the lines of one paragraph with widow/orphan control
+    /// (LAYOUT-1.3.md §3): every page break keeps **at least two** lines
+    /// on each side. When that is impossible without splitting (a 2- or
+    /// 3-line paragraph, or one taller than a page after the break), the
+    /// paragraph is moved whole to a fresh page; a paragraph taller than
+    /// a full page is split as evenly as the rule allows, never looping.
+    fn place_text_lines(&mut self, frag: Frag, mut gap: i64) {
+        let mut atoms = frag.atoms;
+        let heights: Vec<i64> = atoms.iter().map(|a| a.height).collect();
+        let n = atoms.len();
+        let mut i = 0usize;
+        while i < n {
+            let lead_gap = if self.page_top { 0 } else { gap };
+            // How many of the remaining lines fit on the current page.
+            let mut acc = 0i64;
+            let mut fit = 0usize;
+            for (off, &h) in heights[i..].iter().enumerate() {
+                acc += h;
+                if self.y + lead_gap + acc <= self.limit() {
+                    fit = off + 1;
+                } else {
+                    break;
+                }
+            }
+            let remaining = n - i;
+            let take = if fit >= remaining {
+                remaining
+            } else {
+                let mut t = fit;
+                if remaining - t == 1 {
+                    t = t.saturating_sub(1); // widow: keep ≥2 lines for the next page
+                }
+                if t < 2 {
+                    // Orphan: <2 lines would stay here. On a fresh page,
+                    // place what fits (the paragraph is taller than a
+                    // page — unavoidable). Otherwise move it whole down.
+                    if self.page_top {
+                        fit.max(1)
+                    } else {
+                        self.new_page();
+                        gap = 0;
+                        continue;
+                    }
+                } else {
+                    t
+                }
+            };
+            let mut g = lead_gap;
+            for (atom, &h) in atoms[i..i + take].iter_mut().zip(&heights[i..i + take]) {
+                self.y += g;
+                g = 0;
+                let y = self.y;
+                let ops = core::mem::take(&mut atom.ops);
+                self.cur.extend(ops.into_iter().map(|op| op.finalize(y)));
+                self.y += h;
+                self.page_top = false;
+            }
+            i += take;
+            if i < n {
+                self.new_page();
+                gap = 0;
+            }
         }
         self.prev_after = frag.space_after;
     }
@@ -588,7 +688,10 @@ impl Engine<'_> {
         Ok(match node {
             Node::Para(p) => {
                 let lt = self.styled_text(&p.children)?;
-                Frag::block(self.text_atoms(&lt, SIZE_BODY, x, width, path, true))
+                let mut frag = Frag::block(self.text_atoms(&lt, SIZE_BODY, x, width, path, true));
+                // Body paragraphs are eligible for widow/orphan control.
+                frag.text_lines = true;
+                frag
             }
             Node::Heading(h) => {
                 let lt = self.styled_text(&h.children)?;
@@ -682,7 +785,6 @@ impl Engine<'_> {
     ) -> Vec<Atom> {
         let line_h = FontMetrics::line_height_um(size_um);
         let ascent = self.font.ascent_um(size_um);
-        let lines = break_lines(lt, size_um, width.max(1));
         let bidi = if self.opts.engine.bidi() && (self.base_rtl || lt.text.chars().any(is_rtl_char))
         {
             Some(unicode_bidi::BidiInfo::new(
@@ -696,6 +798,15 @@ impl Engine<'_> {
         } else {
             None
         };
+        // Hyphenation (engine 1.3): English body text only, and never on
+        // bidi-reordered lines (the hyphen would land on the wrong
+        // visual edge — deferred with the rest of complex-script work).
+        let hyph = if justify && self.opts.engine.hyphenate() && self.lang_en && bidi.is_none() {
+            Some(Hyphenator::en_us())
+        } else {
+            None
+        };
+        let lines = break_lines_hyphenated(lt, size_um, width.max(1), hyph);
         let justify = justify && self.opts.engine.justify();
         lines
             .iter()
@@ -795,6 +906,29 @@ impl Engine<'_> {
                     color,
                 });
             }
+        }
+        // Inserted hyphen at a mid-word break (engine 1.3). It is layout
+        // decoration, not source content, so it carries an empty
+        // char_range at the break point (like list bullets / field
+        // labels) — consumers can drop it from copy/extraction. Its
+        // width was already counted in `line.width_um`, so on a
+        // justified line it lands flush at the right edge.
+        if line.hyphen {
+            let at = line.end.saturating_sub(1);
+            let face = lt.face_at(at);
+            let is_link = lt.links.iter().any(|&(ls, le)| at >= ls && at < le);
+            let x = x_left + lt.width_um(line.start, line.end, size_um) + bonus_before(line.end);
+            ops.push(Op::Text {
+                x,
+                baseline: ascent,
+                size_um,
+                face,
+                color: if is_link { LINK_BLUE } else { BLACK },
+                rtl: false,
+                text: "-".to_owned(),
+                path: path.to_vec(),
+                range: (line.end as u64, line.end as u64),
+            });
         }
     }
 

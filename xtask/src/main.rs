@@ -151,6 +151,29 @@ fn gen_vectors() -> Result<()> {
         "note": "engine 1.2: mono + underline + justified body text + Hebrew bidi (LAYOUT-1.2.md); RTL runs carry the format-0.3 rtl flag with logical-order text",
     }));
 
+    // Engine 1.3 on a narrow, short page so both new behaviors fire:
+    // English body text hyphenates, and paragraphs straddling the short
+    // page are kept together by widow/orphan control.
+    let furniture = furniture_doc()?;
+    let opts_13 = vsd_layout::LayoutOptions {
+        page_width_um: 90_000,
+        page_height_um: 90_000,
+        engine: vsd_layout::EngineVersion::V1_3,
+    };
+    let laid_13 = vsd_layout::add_render_cache(&furniture, &opts_13)?;
+    let laid_13_bytes = write_document(&laid_13, &[], &WriteOptions { compress: false })?;
+    write(&valid.join("laid-out-1.3.vsd"), &laid_13_bytes)?;
+    let cache_13 = laid_13.render_cache()?.expect("cache present");
+    valid_entries.push(json!({
+        "file": "valid/laid-out-1.3.vsd",
+        "doc_id": laid_13.document_id()?.to_hex(),
+        "profile": "core",
+        "layout_engine": "vsd-layout/1.3.0",
+        "layout_hash": hex::encode(cache_13.layout_hash),
+        "layout_pages": cache_13.pages.len(),
+        "note": "engine 1.3 page furniture (LAYOUT-1.3.md): Knuth-Liang hyphenation of English body text (pinned en-US patterns) and widow/orphan control; inserted hyphens carry an empty char_range",
+    }));
+
     let (redacted, predecessor_id, proof) = redacted_doc()?;
     let red_bytes = write_document(&redacted, &[], &WriteOptions { compress: false })?;
     write(&valid.join("redacted.vsd"), &red_bytes)?;
@@ -491,6 +514,48 @@ fn widened_doc() -> Result<Document> {
                     mono: false,
                 },
             ],
+        })
+        .build()?)
+}
+
+/// A document exercising engine 1.3's page furniture: long English
+/// words that hyphenate at a narrow measure, and several paragraphs
+/// that straddle a short page so widow/orphan control engages.
+fn furniture_doc() -> Result<Document> {
+    let para = |text: &str| {
+        Node::Para(Para {
+            children: vec![Inline::Text(text.into())],
+        })
+    };
+    let root = Node::Doc(Doc {
+        lang: "en".into(),
+        dir: Direction::Ltr,
+        children: vec![
+            Node::Heading(Heading {
+                level: 1,
+                children: vec![Inline::Text("Engine 1.3 page furniture".into())],
+            }),
+            para(
+                "Internationalization and the establishment of comprehensive \
+                 documentation standards require extraordinarily collaborative \
+                 organizations working methodically toward interoperability.",
+            ),
+            para(
+                "Hyphenation distributes the inevitable awkwardness of justified \
+                 measures across many lines instead of concentrating it into a \
+                 few unfortunate rivers of whitespace.",
+            ),
+            para(
+                "Widow and orphan control keeps the lines of a paragraph together \
+                 two at a time, so a page break never strands a solitary line at \
+                 the top or bottom of a column.",
+            ),
+        ],
+    });
+    Ok(DocumentBuilder::new(root)
+        .metadata(Metadata {
+            title: Some("VSD conformance: engine 1.3 page furniture".into()),
+            ..Default::default()
         })
         .build()?)
 }

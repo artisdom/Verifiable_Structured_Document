@@ -5,6 +5,7 @@ use vsd_core::manifest::Style;
 use vsd_core::tree::Inline;
 
 use crate::font::{Face, FontMetrics};
+use crate::hyphen::Hyphenator;
 
 /// Which style-table flags an engine version honors (each contract
 /// freezes its own policy forever).
@@ -76,6 +77,16 @@ impl LayoutText {
         } else {
             styled
         }
+    }
+
+    /// Advance of an inserted hyphen `-` at a break ending at
+    /// `before_byte`, measured in the style face of the last content
+    /// character (script fallback never applies — the hyphen is ASCII).
+    /// The same value is used by line breaking (to honor the width
+    /// limit) and by emission (to place the glyph), so they agree.
+    pub fn hyphen_um(&self, before_byte: usize, size_um: i64) -> i64 {
+        let face = self.face_at(before_byte.saturating_sub(1));
+        FontMetrics::face_metrics(face).char_advance_um('-', size_um)
     }
 
     /// Exact width of `text[start..end]` in µm: integer sum of scaled
@@ -253,91 +264,197 @@ fn collect(
 pub struct Line {
     pub start: usize,
     pub end: usize,
+    /// Measured width in µm, **including** a trailing hyphen when
+    /// `hyphen` is set (so justification and right edges are correct).
     pub width_um: i64,
+    /// The line ends at a mid-word hyphenation break (LAYOUT-1.3.md):
+    /// emission appends a `-` glyph at the line's end.
+    pub hyphen: bool,
 }
 
-/// Greedy first-fit line breaking (§5). Break opportunities exist only
-/// after a collapsed space; oversized segments force-break before the
-/// first overflowing glyph with a minimum of one glyph per line.
-/// Measurement is face-attributed via the layout text (with no face
-/// ranges this is byte-identical to the 1.0 contract).
-pub fn break_lines(lt: &LayoutText, size_um: i64, max_width_um: i64) -> Vec<Line> {
-    let text = &lt.text;
+/// Greedy first-fit line breaking with optional Knuth–Liang
+/// hyphenation (LAYOUT-1.3.md §2). With `hyph = None` the output is
+/// byte-identical to the 1.0 contract; with a hyphenator, a word that
+/// overflows the current line is broken at the longest hyphenation
+/// point whose prefix (plus a hyphen) still fits, before falling back
+/// to moving the whole word down or — only for unhyphenatable
+/// overflow — force-breaking by glyph.
+pub fn break_lines_hyphenated(
+    lt: &LayoutText,
+    size_um: i64,
+    max_width_um: i64,
+    hyph: Option<&Hyphenator>,
+) -> Vec<Line> {
     let mut lines = Vec::new();
-    if text.is_empty() {
+    if lt.text.is_empty() {
         return lines;
     }
-
-    let mut line_start = 0usize;
-    let mut line_width = 0i64;
+    let mut st = BreakState { start: 0, width: 0 };
     let mut pos = 0usize;
+    for word in lt.text.split(' ') {
+        let ws = pos;
+        let we = pos + word.len();
+        pos = we + 1; // step over the separating space
+        lay_word(lt, size_um, max_width_um, hyph, ws, we, &mut lines, &mut st);
+    }
+    if st.width > 0 || st.start < lt.text.len() {
+        lines.push(Line {
+            start: st.start,
+            end: lt.text.len(),
+            width_um: st.width,
+            hyphen: false,
+        });
+    }
+    lines
+}
 
-    // Words are the maximal space-free segments (text is collapsed, so
-    // separators are single U+0020s).
-    for word in text.split(' ') {
-        let word_start = pos;
-        let word_end = pos + word.len();
-        pos = word_end + 1; // step over the separating space
+/// Mutable line-building cursor: the byte offset the current (not yet
+/// emitted) line starts at, and its accumulated width.
+struct BreakState {
+    start: usize,
+    width: i64,
+}
 
-        // The separator space is measured in its own attributed face.
-        let sep_w = if line_width > 0 && word_start > 0 {
-            lt.width_um(word_start - 1, word_start, size_um)
-        } else {
-            0
-        };
-        let word_w = lt.width_um(word_start, word_end, size_um);
-
-        if line_width + sep_w + word_w <= max_width_um {
-            line_width += sep_w + word_w;
-            continue;
+/// Place one space-free word `[ws, we)` after the current line content.
+#[allow(clippy::too_many_arguments)]
+fn lay_word(
+    lt: &LayoutText,
+    size_um: i64,
+    max_width_um: i64,
+    hyph: Option<&Hyphenator>,
+    ws: usize,
+    we: usize,
+    lines: &mut Vec<Line>,
+    st: &mut BreakState,
+) {
+    let sep_w = if st.width > 0 && ws > 0 {
+        lt.width_um(ws - 1, ws, size_um)
+    } else {
+        0
+    };
+    let word_w = lt.width_um(ws, we, size_um);
+    if st.width + sep_w + word_w <= max_width_um {
+        st.width += sep_w + word_w;
+        return;
+    }
+    // The word does not fit after the current content.
+    if st.width > 0 {
+        // Try to hyphenate a prefix onto the current line.
+        if let Some(h) = hyph {
+            let budget = max_width_um - st.width - sep_w;
+            if let Some(rel) = best_hyphen_prefix(lt, h, ws, we, size_um, budget) {
+                let bb = ws + rel;
+                let content = st.width + sep_w + lt.width_um(ws, bb, size_um);
+                lines.push(Line {
+                    start: st.start,
+                    end: bb,
+                    width_um: content + lt.hyphen_um(bb, size_um),
+                    hyphen: true,
+                });
+                st.start = bb;
+                st.width = 0;
+                lay_word_fresh(lt, size_um, max_width_um, hyph, bb, we, lines, st);
+                return;
+            }
         }
+        // No hyphen prefix fit: flush the current line, place the word
+        // on a fresh one.
+        lines.push(Line {
+            start: st.start,
+            end: ws.saturating_sub(1),
+            width_um: st.width,
+            hyphen: false,
+        });
+        st.start = ws;
+        st.width = 0;
+    }
+    lay_word_fresh(lt, size_um, max_width_um, hyph, ws, we, lines, st);
+}
 
-        // The word does not fit after the current content.
-        if line_width > 0 {
-            lines.push(Line {
-                start: line_start,
-                end: word_start.saturating_sub(1),
-                width_um: line_width,
-            });
-            line_start = word_start;
-        }
+/// Place a word `[ws, we)` starting on an empty line, hyphenating or
+/// force-breaking as needed. Leaves the trailing fragment as the new
+/// current line in `st`.
+#[allow(clippy::too_many_arguments)]
+fn lay_word_fresh(
+    lt: &LayoutText,
+    size_um: i64,
+    max_width_um: i64,
+    hyph: Option<&Hyphenator>,
+    mut ws: usize,
+    we: usize,
+    lines: &mut Vec<Line>,
+    st: &mut BreakState,
+) {
+    loop {
+        let word_w = lt.width_um(ws, we, size_um);
         if word_w <= max_width_um {
-            line_width = word_w;
-            continue;
+            st.start = ws;
+            st.width = word_w;
+            return;
         }
-
-        // Force-break the oversized word, ≥ 1 glyph per line.
-        let mut seg_start = word_start;
+        if let Some(h) = hyph {
+            if let Some(rel) = best_hyphen_prefix(lt, h, ws, we, size_um, max_width_um) {
+                let bb = ws + rel;
+                lines.push(Line {
+                    start: ws,
+                    end: bb,
+                    width_um: lt.width_um(ws, bb, size_um) + lt.hyphen_um(bb, size_um),
+                    hyphen: true,
+                });
+                ws = bb;
+                continue;
+            }
+        }
+        // Unhyphenatable overflow: force-break by glyph, ≥ 1 per line.
+        let mut seg_start = ws;
         let mut seg_width = 0i64;
-        for (off, c) in word.char_indices() {
+        for (off, c) in lt.text[ws..we].char_indices() {
+            let at = ws + off;
             let cw = if c.is_control() {
                 0
             } else {
-                let at = word_start + off;
                 lt.width_um(at, at + c.len_utf8(), size_um)
             };
             if seg_width > 0 && seg_width + cw > max_width_um {
                 lines.push(Line {
                     start: seg_start,
-                    end: word_start + off,
+                    end: at,
                     width_um: seg_width,
+                    hyphen: false,
                 });
-                seg_start = word_start + off;
+                seg_start = at;
                 seg_width = 0;
             }
             seg_width += cw;
         }
-        line_start = seg_start;
-        line_width = seg_width;
+        st.start = seg_start;
+        st.width = seg_width;
+        return;
     }
-    if line_width > 0 || line_start < text.len() {
-        lines.push(Line {
-            start: line_start,
-            end: text.len(),
-            width_um: line_width,
-        });
+}
+
+/// The largest hyphenation break (relative byte offset within
+/// `[ws, we)`) whose prefix plus a hyphen fits within `budget` µm, or
+/// `None` if no break point fits.
+fn best_hyphen_prefix(
+    lt: &LayoutText,
+    hyph: &Hyphenator,
+    ws: usize,
+    we: usize,
+    size_um: i64,
+    budget: i64,
+) -> Option<usize> {
+    if budget <= 0 {
+        return None;
     }
-    lines
+    let mut best = None;
+    for rel in hyph.breaks(&lt.text[ws..we]) {
+        let bb = ws + rel;
+        if lt.width_um(ws, bb, size_um) + lt.hyphen_um(bb, size_um) <= budget {
+            best = Some(rel); // breaks() ascends; keep the longest that fits
+        }
+    }
+    best
 }
 
 /// Code-line measurement (§4 exception): verbatim text where a tab
@@ -509,7 +626,7 @@ mod tests {
         let w_space = font.space_advance_um(size);
         // Width fits exactly the first two words.
         let max = font.text_width_um("aaa", size) + w_space + font.text_width_um("bbb", size);
-        let lines = break_lines(&lt, size, max);
+        let lines = break_lines_hyphenated(&lt, size, max, None);
         assert_eq!(lines.len(), 2);
         assert_eq!(&lt.text[lines[0].start..lines[0].end], "aaa bbb");
         assert_eq!(&lt.text[lines[1].start..lines[1].end], "ccc");
@@ -521,7 +638,7 @@ mod tests {
         let size = 3881;
         let lt = plain("abcdefgh");
         let max = font.text_width_um("abc", size); // ~3 glyphs per line
-        let lines = break_lines(&lt, size, max);
+        let lines = break_lines_hyphenated(&lt, size, max, None);
         assert!(lines.len() >= 2);
         // Every line has at least one glyph and no line exceeds max.
         for l in &lines {
@@ -531,6 +648,60 @@ mod tests {
         // Concatenation reproduces the word.
         let joined: String = lines.iter().map(|l| &lt.text[l.start..l.end]).collect();
         assert_eq!(joined, lt.text);
+    }
+
+    #[test]
+    fn hyphenation_breaks_a_long_word_with_a_hyphen() {
+        let font = FontMetrics::get();
+        let h = Hyphenator::en_us();
+        let size = 3881;
+        // "establishment hyphenation" — force a width that cannot hold
+        // "establishment" + the next word, so the second word hyphenates.
+        let lt = plain("establishment hyphenation");
+        let max = font.text_width_um("establishment hyphen", size);
+        let plain_lines = break_lines_hyphenated(&lt, size, max, None);
+        let hyph_lines = break_lines_hyphenated(&lt, size, max, Some(h));
+        // Without hyphenation the second word moves down whole.
+        assert!(plain_lines.iter().all(|l| !l.hyphen));
+        // With hyphenation, a line ends at a mid-word break.
+        let hy = hyph_lines
+            .iter()
+            .find(|l| l.hyphen)
+            .expect("a hyphenated line");
+        // The break is a real hyphenation point of "hyphenation".
+        let word_off = lt.text.find("hyphenation").unwrap();
+        let rel = hy.end - word_off;
+        assert!(
+            h.breaks("hyphenation").contains(&rel),
+            "break at a K-L point"
+        );
+        // The hyphenated line (with its hyphen) never exceeds the width.
+        for l in &hyph_lines {
+            assert!(l.width_um <= max, "hyphenated line overflows");
+        }
+        // Dropping the inserted hyphen, the text is reproduced exactly.
+        let joined: String = hyph_lines
+            .iter()
+            .map(|l| &lt.text[l.start..l.end])
+            .collect::<Vec<_>>()
+            .join("");
+        assert_eq!(joined.replace(' ', ""), lt.text.replace(' ', ""));
+    }
+
+    #[test]
+    fn hyphenation_off_is_byte_identical_to_plain() {
+        let font = FontMetrics::get();
+        let h = Hyphenator::en_us();
+        let size = 3881;
+        // A paragraph with no hyphenatable overflow: short words that
+        // never need breaking must lay out identically with or without
+        // a hyphenator present.
+        let lt = plain("the cat sat on a mat by the door");
+        let max = font.text_width_um("the cat sat", size);
+        assert_eq!(
+            break_lines_hyphenated(&lt, size, max, None),
+            break_lines_hyphenated(&lt, size, max, Some(h)),
+        );
     }
 
     #[test]

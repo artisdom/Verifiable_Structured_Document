@@ -93,6 +93,15 @@
       "profile": "core"
     },
     {
+      "doc_id": "08e8edce40f0043c3f87933c08a23af618a946e65baa0153dea9a6cd26327e70",
+      "file": "valid/laid-out-1.3.vsd",
+      "layout_engine": "vsd-layout/1.3.0",
+      "layout_hash": "1b89f7cf292e28b3eb81349910e6f4d4e6670c9f3decdb2d978b3869546d68e5",
+      "layout_pages": 4,
+      "note": "engine 1.3 page furniture (LAYOUT-1.3.md): Knuth-Liang hyphenation of English body text (pinned en-US patterns) and widow/orphan control; inserted hyphens carry an empty char_range",
+      "profile": "core"
+    },
+    {
       "doc_id": "895a6c349d24b74fb53c416a0319472b21a9dc4791e0c56722aa3184b528575f",
       "file": "valid/redacted.vsd",
       "must_not_contain": "TOP-SECRET-ACCOUNT-9912",

@@ -40,7 +40,7 @@ derived; container as dumb transport. Each layer is independently verifiable.
 ```
 Phase 0  Foundations (canonical layer)        ████████████████████  SHIPPED (v0.1)
 Phase 1  Hardening & ecosystem hygiene        ███████████████████░  SHIPPED (v0.3) — crates.io publish awaits public repo
-Phase 2  The render layer (vsd-layout)        ███████████████████░  SHIPPED (v0.5→0.12) — engines 1.0/1.1/1.2 (faces, mono, underline, justification, Hebrew bidi) + incremental relayout done; 2h shaped scripts (Arabic/Indic/CJK) remain the long tail
+Phase 2  The render layer (vsd-layout)        ███████████████████░  SHIPPED (v0.5→0.13) — engines 1.0–1.3 (faces, mono, underline, justification, Hebrew bidi, hyphenation, widow/orphan) + incremental relayout done; 2i shaped scripts (Arabic/Indic/CJK) + 2j multi-column/MathML are the remaining long tail (font/shaper-gated)
 Phase 3  PDF interop (the adoption wedge)     ██████████████░░░░░░  SHIPPED (v0.7) — export + hybrid round-trip + md on-ramp; rich import (3b/3c) + JXL (3e) open
 Phase 4  Viewing & authoring experience       ████████████░░░░░░░░  SHIPPED (v0.8) — vsd-view, <vsd-doc> WASM viewer, compose API, diff --html, interactive fill; bindings (4c) + Pandoc (4d) open
 Phase 5  Trust infrastructure at scale        █████████████████░░░  SHIPPED (v0.9→0.10) — salting (5f) + reference server (5e) now complete; full PKI (5a) + C2PA serialization (5c) open
@@ -247,13 +247,28 @@ forever against their pinned engine.
       face and writes RTL glyphs in visual order; viewer/rasterizer draw
       with the face the engine measured with and mirror highlight
       geometry inside RTL runs.
-- [ ] **2h. Shaped scripts & page furniture** (the long tail beyond 1.2,
-      each gated on its own pinned dependency): Arabic/Indic via a
-      pinned pure-Rust shaper (the next major engine effort — metrics
-      truth requires real shaping, not glyph-per-char), CJK + vertical
-      text (CJK fonts + breaking rules), Thai/Lao dictionary breaking,
-      bracket mirroring + mark positioning, floats & multi-column,
-      MathML layout, hyphenation, widow/orphan control.
+- [x] **2h. Page furniture** — **engine 1.3 shipped (v0.13,
+      [docs/LAYOUT-1.3.md](docs/LAYOUT-1.3.md))**: Knuth–Liang
+      **hyphenation** of English body text (pinned en-US TeX patterns,
+      hash in the contract; pure integer/string work, language-gated so
+      the engine never invents a break it has no patterns for; the
+      inserted hyphen is decoration with an empty `char_range`) and
+      **widow/orphan control** in pagination (every page break keeps ≥2
+      lines of a paragraph on each side, or moves the paragraph whole).
+      No display-list format change. The frozen contracts held
+      perfectly: the 1.0/1.1/1.2 golden layout hashes are **byte-for-byte
+      unchanged** by the widening (only a new 1.3 vector was added).
+- [ ] **2i. Shaped & complex scripts** — the genuine next major engine
+      effort, each gated on a pinned dependency this environment cannot
+      yet source cleanly: Arabic/Indic via a pinned pure-Rust shaper
+      (metrics truth needs real shaping + a positioned-glyph display
+      list, not glyph-per-char), CJK + vertical text (CJK fonts +
+      breaking rules), Thai/Lao dictionary breaking, bracket mirroring +
+      mark positioning. Engine 1.3 continues to **refuse** these rather
+      than mis-render them.
+- [ ] **2j. Advanced page layout**: floats & multi-column (needs a
+      `columns` block attribute — an additive format change) and MathML
+      layout (today math renders via its fallback image or as code).
 - [x] **2g. Incremental relayout** (§13.2): `LayoutSession` — a fragment
       cache keyed by (block canonical bytes, position, width, engine
       version, inputs fingerprint), so block fragmentation (shaping +
@@ -577,6 +592,7 @@ core spec before a working prototype and an adversarial review.
 | **0.10** ✅ | Standardization prep | Consolidated CC-BY spec (format 0.2: salted disclosure), conformance program, governance docs, regulatory dossiers, reference object-store server, in-browser signature verification |
 | **0.11** ✅ | Engine 1.1 + incremental | Bold/italic/bold-italic faces (versioned contract, 1.0 caches verify forever), `LayoutSession` incremental relayout (one edit = one re-shape, byte-identical output) |
 | **0.12** ✅ | Engine 1.2 typography | Monospace + underline + justification + Hebrew bidi/RTL (format 0.3 `rtl` flag, logical-order runs); unsupported scripts refused, never mis-rendered; 1.0/1.1 golden hashes unchanged |
+| **0.13** ✅ | Engine 1.3 page furniture | Knuth–Liang hyphenation of English body text (pinned en-US patterns) + widow/orphan control; no format change; 1.0/1.1/1.2 golden hashes byte-for-byte unchanged |
 | **1.0** | Freeze | Spec 1.0, two implementations, audit complete, ISO/W3C track |
 
 *Versioning policy:* the format major version and the crate versions decouple
@@ -590,10 +606,11 @@ crates keep evolving.
 - **Want maximum leverage now?** Grow the conformance corpus (`testdata/`)
   with adversarial vectors, or run long fuzz campaigns against the targets
   in `fuzz/` — the harnesses exist; depth is what's wanted.
-- **Want the hard problem?** Phase 2h — widening `vsd-layout` to shaped
-  scripts (Arabic/Indic need a pinned pure-Rust shaper) while keeping the
-  determinism contract airtight; the 1.0→1.2 contracts
-  (docs/LAYOUT-1.x.md) show the required rigor.
+- **Want the hard problem?** Phase 2i — widening `vsd-layout` to shaped
+  scripts (Arabic/Indic need a pinned pure-Rust shaper plus a
+  positioned-glyph display list) while keeping the determinism contract
+  airtight; the 1.0→1.3 contracts (docs/LAYOUT-1.x.md) show the required
+  rigor.
 - **Want adoption?** Phase 3b's open half — walking a foreign tagged PDF's
   structure tree into a content tree — or richer `StructureRecovery`
   built-ins (columns, tables); the trait and pipeline already exist. A

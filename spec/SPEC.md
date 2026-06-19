@@ -192,9 +192,14 @@ their output never changes, so old caches stay verifiable forever.
 Reference contracts: `vsd-layout/1.0.0`
 ([docs/LAYOUT-1.0.md](../docs/LAYOUT-1.0.md)), `vsd-layout/1.1.0`
 ([docs/LAYOUT-1.1.md](../docs/LAYOUT-1.1.md), adds bold/italic faces),
-and `vsd-layout/1.2.0` ([docs/LAYOUT-1.2.md](../docs/LAYOUT-1.2.md),
+`vsd-layout/1.2.0` ([docs/LAYOUT-1.2.md](../docs/LAYOUT-1.2.md),
 adds monospace, underline, justification, and Hebrew bidi; refuses
-scripts it cannot set faithfully).
+scripts it cannot set faithfully), and `vsd-layout/1.3.0`
+([docs/LAYOUT-1.3.md](../docs/LAYOUT-1.3.md), adds Knuth–Liang
+hyphenation of English body text and widow/orphan control — a
+layout-engine version with no display-list format change). Each engine
+version is frozen: the conformance corpus pins one golden vector per
+version and a conforming reader MUST reproduce all of them.
 
 ## 8. (reserved)
 
