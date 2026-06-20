@@ -129,6 +129,15 @@
       "profile": "core"
     },
     {
+      "doc_id": "d43569d551fa484864855a4d098f34cb47e73168590f4f94ef01ad6412d970e6",
+      "file": "valid/laid-out-1.7.vsd",
+      "layout_engine": "vsd-layout/1.7.0",
+      "layout_hash": "3107d5f47cbd66bd96ecbb8f6fa40ff1a4fc649fa765154094db0d8d8bdda28e",
+      "layout_pages": 2,
+      "note": "engine 1.7 (LAYOUT-1.7.md): CJK (Han/kana/Hangul) in the pinned pan-CJK CFF face, rendered per glyph with inter-ideograph line breaking (simple kinsoku); horizontal writing; reuses the format-0.4 display list, no format change",
+      "profile": "core"
+    },
+    {
       "doc_id": "8079236045ad4f0e947e6f0cb8a2c8b255087d548a87c9613e80a27f7ec86ae9",
       "file": "valid/redacted.vsd",
       "must_not_contain": "TOP-SECRET-ACCOUNT-9912",

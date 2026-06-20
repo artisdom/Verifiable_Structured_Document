@@ -234,6 +234,29 @@ fn gen_vectors() -> Result<()> {
         "note": "engine 1.6 (LAYOUT-1.6.md): Thai + Lao shaped by the pinned rustybuzz, with dictionary-based line breaking (forward longest-match over the pinned ICU word lists) since these scripts have no inter-word spaces; reuses the format-0.4 'glyphs' op, no format change",
     }));
 
+    // Engine 1.7: CJK. A narrow page forces the spaceless Chinese text to
+    // wrap, exercising inter-ideograph line breaking; the pan-CJK face is
+    // a CFF/OpenType font (CID == GID).
+    let cjk = cjk_doc()?;
+    let opts_17 = vsd_layout::LayoutOptions {
+        page_width_um: 70_000,
+        page_height_um: 90_000,
+        engine: vsd_layout::EngineVersion::V1_7,
+    };
+    let laid_17 = vsd_layout::add_render_cache(&cjk, &opts_17)?;
+    let laid_17_bytes = write_document(&laid_17, &[], &WriteOptions { compress: false })?;
+    write(&valid.join("laid-out-1.7.vsd"), &laid_17_bytes)?;
+    let cache_17 = laid_17.render_cache()?.expect("cache present");
+    valid_entries.push(json!({
+        "file": "valid/laid-out-1.7.vsd",
+        "doc_id": laid_17.document_id()?.to_hex(),
+        "profile": "core",
+        "layout_engine": "vsd-layout/1.7.0",
+        "layout_hash": hex::encode(cache_17.layout_hash),
+        "layout_pages": cache_17.pages.len(),
+        "note": "engine 1.7 (LAYOUT-1.7.md): CJK (Han/kana/Hangul) in the pinned pan-CJK CFF face, rendered per glyph with inter-ideograph line breaking (simple kinsoku); horizontal writing; reuses the format-0.4 display list, no format change",
+    }));
+
     let (redacted, predecessor_id, proof) = redacted_doc()?;
     let red_bytes = write_document(&redacted, &[], &WriteOptions { compress: false })?;
     write(&valid.join("redacted.vsd"), &red_bytes)?;
@@ -713,6 +736,37 @@ fn thai_doc() -> Result<Document> {
     Ok(DocumentBuilder::new(root)
         .metadata(Metadata {
             title: Some("VSD conformance: engine 1.6 Thai/Lao dictionary line breaking".into()),
+            ..Default::default()
+        })
+        .build()?)
+}
+
+fn cjk_doc() -> Result<Document> {
+    let root = Node::Doc(Doc {
+        lang: "zh".into(),
+        dir: Direction::Ltr,
+        children: vec![
+            Node::Heading(Heading {
+                level: 1,
+                children: vec![Inline::Text("Engine 1.7".into())],
+            }),
+            // Chinese: no inter-word spaces; the inter-ideograph breaker
+            // wraps it between characters on the narrow page.
+            Node::Para(Para {
+                children: vec![Inline::Text(
+                    "这是一个用于测试中日韩文字排版的段落它没有空格但可以在表意文字之间换行从而在窄页面上正确折行".into(),
+                )],
+            }),
+            // Japanese (kana + kanji) and Korean (Hangul) — the same
+            // pinned pan-CJK face covers all three scripts.
+            Node::Para(Para {
+                children: vec![Inline::Text("日本語のテキストと한국어 텍스트を混在させた段落。".into())],
+            }),
+        ],
+    });
+    Ok(DocumentBuilder::new(root)
+        .metadata(Metadata {
+            title: Some("VSD conformance: engine 1.7 CJK".into()),
             ..Default::default()
         })
         .build()?)

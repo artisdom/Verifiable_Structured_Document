@@ -288,10 +288,21 @@ forever against their pinned engine.
       word lists) since those scripts have no inter-word spaces — break
       opportunities feed the same greedy breaker as spaces/hyphenation,
       zero-width and hyphenless. No format change; per-version gating
-      keeps 1.5 refusing Thai/Lao; 1.0–1.5 hashes unchanged. ☐ Still
-      refused (no font / no algorithm yet): CJK + vertical text, other
-      complex scripts beyond the major Brahmic + Thai/Lao set (Myanmar,
-      Khmer, Tibetan, Ethiopic, …).
+      keeps 1.5 refusing Thai/Lao; 1.0–1.5 hashes unchanged. **Engine
+      1.7 shipped (v0.17, [docs/LAYOUT-1.7.md](docs/LAYOUT-1.7.md))**:
+      **CJK** (Han, kana, Hangul) in **horizontal** writing, rendered
+      per glyph from the pinned full Noto Sans CJK SC face (a 16 MB
+      CFF/OpenType font, CID==GID via Adobe-Identity-0) with
+      **inter-ideograph line breaking** (simple kinsoku) feeding the same
+      greedy breaker. The CFF face embeds in PDF as `FontFile3` /
+      `CIDFontType0` (a new path; every TrueType face still uses
+      `FontFile2`). No format change; 1.0–1.6 hashes unchanged;
+      per-version gating keeps 1.6 refusing CJK. ☐ Still refused:
+      **vertical writing mode** (`vertical-rl` — needs an additive
+      `writing-mode` format change + column geometry; its own future
+      version), CJK punctuation/fullwidth routing, PDF font subsetting,
+      and complex scripts beyond the major Brahmic + Thai/Lao + CJK set
+      (Myanmar, Khmer, Tibetan, Ethiopic, …).
 - [ ] **2j. Advanced page layout**: floats & multi-column (needs a
       `columns` block attribute — an additive format change) and MathML
       layout (today math renders via its fallback image or as code).
@@ -622,6 +633,7 @@ core spec before a working prototype and an adversarial review.
 | **0.14** ✅ | Engine 1.4 shaped scripts | Arabic + Devanagari shaping via pinned rustybuzz; new format-0.4 `glyphs` op (positioned glyphs, logical text retained); consumers are dumb glyph-drawers; 1.0–1.3 golden hashes unchanged |
 | **0.15** ✅ | Engine 1.5 Brahmic + mirroring | Bengali/Gurmukhi/Gujarati/Oriya/Tamil/Telugu/Kannada/Malayalam/Sinhala shaping (same pinned rustybuzz) + UAX #9 bidi mirroring (pinned Unicode 17.0.0 table); reuses `glyphs` op (no format change); every prior `.vsd` byte-identical, 1.0–1.4 hashes unchanged |
 | **0.16** ✅ | Engine 1.6 Thai/Lao | Thai + Lao shaping + dictionary-based line breaking (forward longest-match over pinned ICU word lists; spaceless scripts); reuses `glyphs` op (no format change); 1.0–1.5 hashes unchanged |
+| **0.17** ✅ | Engine 1.7 CJK (horizontal) | Han/kana/Hangul in the pinned full Noto Sans CJK SC face (16 MB CFF, CID==GID); per-glyph layout + inter-ideograph line breaking (kinsoku); new CFF `FontFile3`/`CIDFontType0` PDF path; no format change; 1.0–1.6 hashes unchanged |
 | **1.0** | Freeze | Spec 1.0, two implementations, audit complete, ISO/W3C track |
 
 *Versioning policy:* the format major version and the crate versions decouple

@@ -577,20 +577,45 @@ fn embed_font(w: &mut PdfWriter, typeface: Face, gids: &BTreeMap<u16, char>) -> 
     let font_bytes = typeface.bytes();
     let font_name = typeface.name();
 
-    // FontFile2: the pinned TTF, flate-compressed.
+    // The pinned CJK face is a CFF/OpenType font (CID-keyed,
+    // Adobe-Identity-0 ROS → CID == GID), so it embeds as FontFile3
+    // (/Subtype /OpenType) under a CIDFontType0 descendant. Every other
+    // pinned face is TrueType: FontFile2 + CIDFontType2.
+    let is_cff = matches!(typeface, Face::Cjk);
     let compressed = flate(font_bytes);
-    let font_file = w.stream(
-        &format!("/Filter /FlateDecode /Length1 {}", font_bytes.len()),
-        &compressed,
-    );
+    let font_file_entry = if is_cff {
+        let ff = w.stream(
+            &format!(
+                "/Subtype /OpenType /Filter /FlateDecode /Length1 {}",
+                font_bytes.len()
+            ),
+            &compressed,
+        );
+        format!("/FontFile3 {}", ff.r())
+    } else {
+        let ff = w.stream(
+            &format!("/Filter /FlateDecode /Length1 {}", font_bytes.len()),
+            &compressed,
+        );
+        format!("/FontFile2 {}", ff.r())
+    };
 
     let bbox = face.global_bounding_box();
     let italic = matches!(typeface, Face::Italic | Face::BoldItalic);
+    // Symbolic flag (4) for the CJK face; (non)symbolic serif/sans (32)
+    // plus italic (64) for the Latin-script faces.
+    let flags = if is_cff {
+        4
+    } else if italic {
+        32 | 64
+    } else {
+        32
+    };
     let descriptor = w.add(format!(
         "<< /Type /FontDescriptor /FontName /{font_name} /Flags {} \
          /FontBBox [{} {} {} {}] /ItalicAngle {} /Ascent {} /Descent {} \
-         /CapHeight {} /StemV {} /FontFile2 {} >>",
-        if italic { 32 | 64 } else { 32 },
+         /CapHeight {} /StemV {} {} >>",
+        flags,
         bbox.x_min,
         bbox.y_min,
         bbox.x_max,
@@ -604,19 +629,28 @@ fn embed_font(w: &mut PdfWriter, typeface: Face, gids: &BTreeMap<u16, char>) -> 
         } else {
             80
         },
-        font_file.r()
+        font_file_entry,
     ));
 
-    // Widths for used glyphs (Noto Sans upem = 1000 = PDF glyph space).
+    // Widths for used glyphs (all pinned faces use upem = 1000 = PDF
+    // glyph space). For the CID-keyed CFF the CID equals the GID.
     let mut w_array = String::new();
     for (&gid, _) in gids.iter() {
         let adv = metrics.advance_units(ttf_gid(gid));
         let _ = write!(w_array, "{gid} [{adv}] ");
     }
+    let (cid_subtype, cid_to_gid) = if is_cff {
+        // CIDFontType0: CID→GID comes from the embedded CFF charset,
+        // which is identity, so no CIDToGIDMap entry applies.
+        ("CIDFontType0", String::new())
+    } else {
+        ("CIDFontType2", " /CIDToGIDMap /Identity".to_owned())
+    };
+    let default_width = if is_cff { 1000 } else { 600 };
     let cid_font = w.add(format!(
-        "<< /Type /Font /Subtype /CIDFontType2 /BaseFont /{font_name} \
+        "<< /Type /Font /Subtype /{cid_subtype} /BaseFont /{font_name} \
          /CIDSystemInfo << /Registry (Adobe) /Ordering (Identity) /Supplement 0 >> \
-         /FontDescriptor {} /DW 600 /W [{}] /CIDToGIDMap /Identity >>",
+         /FontDescriptor {} /DW {default_width} /W [{}]{cid_to_gid} >>",
         descriptor.r(),
         w_array.trim_end()
     ));

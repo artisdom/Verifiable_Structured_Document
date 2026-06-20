@@ -36,6 +36,10 @@ static FONT_SINHALA: &[u8] = include_bytes!("../assets/NotoSansSinhala-Regular.t
 // pinned `rustybuzz`; their line breaking is dictionary-based (§3).
 static FONT_THAI: &[u8] = include_bytes!("../assets/NotoSansThai-Regular.ttf");
 static FONT_LAO: &[u8] = include_bytes!("../assets/NotoSansLao-Regular.ttf");
+// Engine 1.7 — full Noto Sans CJK SC (LAYOUT-1.7.md §2). A CFF/OpenType
+// font (CID-keyed, Adobe-Identity-0 ROS → CID == GID). Not shaped: Han,
+// kana, and hangul render per glyph; line breaking is inter-ideograph.
+static FONT_CJK: &[u8] = include_bytes!("../assets/NotoSansCJKsc-Regular.otf");
 
 /// A face of the pinned family. Display lists carry the index in
 /// `TextRun::font` / `GlyphRun::font`. Engine 1.0 only ever emits
@@ -64,10 +68,11 @@ pub enum Face {
     Sinhala = 16,
     Thai = 17,
     Lao = 18,
+    Cjk = 19,
 }
 
 impl Face {
-    pub const ALL: [Face; 19] = [
+    pub const ALL: [Face; 20] = [
         Face::Regular,
         Face::Bold,
         Face::Italic,
@@ -87,6 +92,7 @@ impl Face {
         Face::Sinhala,
         Face::Thai,
         Face::Lao,
+        Face::Cjk,
     ];
 
     pub fn index(self) -> u64 {
@@ -115,6 +121,7 @@ impl Face {
             16 => Face::Sinhala,
             17 => Face::Thai,
             18 => Face::Lao,
+            19 => Face::Cjk,
             _ => Face::Regular,
         }
     }
@@ -203,6 +210,9 @@ impl Face {
             shaped
         } else if matches!(c, '\u{0590}'..='\u{05FF}' | '\u{FB1D}'..='\u{FB4F}') {
             Face::Hebrew
+        } else if is_cjk(c) {
+            // CJK (engine 1.7): one pinned pan-CJK face; not shaped.
+            Face::Cjk
         } else {
             self
         }
@@ -230,6 +240,7 @@ impl Face {
             Face::Sinhala => FONT_SINHALA,
             Face::Thai => FONT_THAI,
             Face::Lao => FONT_LAO,
+            Face::Cjk => FONT_CJK,
         }
     }
 
@@ -254,8 +265,31 @@ impl Face {
             Face::Sinhala => "NotoSansSinhala-Regular",
             Face::Thai => "NotoSansThai-Regular",
             Face::Lao => "NotoSansLao-Regular",
+            Face::Cjk => "NotoSansCJKsc-Regular",
         }
     }
+}
+
+/// Whether `c` is a CJK character the pinned pan-CJK face sets and the
+/// inter-ideograph line breaker treats as breakable (engine 1.7): Han
+/// (incl. Ext-A and compatibility), Hiragana, Katakana, and Hangul.
+///
+/// These are **exactly** the ranges every pre-1.7 engine already refuses
+/// (`refused_script`), which is the freeze-safety invariant: routing a
+/// codepoint to the CJK face here only affects engine versions that
+/// would have refused it anyway, so no frozen engine's output changes.
+/// (CJK symbols/punctuation U+3000–303F and the fullwidth forms are
+/// outside the historical refusal set, so they are left on the Regular
+/// path — a documented 1.7 gap, addressable only by a future engine.)
+pub fn is_cjk(c: char) -> bool {
+    matches!(c,
+        '\u{1100}'..='\u{11FF}'   // Hangul Jamo
+        | '\u{3040}'..='\u{30FF}' // Hiragana + Katakana
+        | '\u{3400}'..='\u{4DBF}' // CJK Unified Ideographs Extension A
+        | '\u{4E00}'..='\u{9FFF}' // CJK Unified Ideographs
+        | '\u{AC00}'..='\u{D7AF}' // Hangul Syllables
+        | '\u{F900}'..='\u{FAFF}' // CJK Compatibility Ideographs
+    )
 }
 
 /// The one rounding primitive of the contract (§1.1):
@@ -275,7 +309,7 @@ pub struct FontMetrics {
     pub line_gap_units: i64,
 }
 
-static METRICS: OnceLock<[FontMetrics; 19]> = OnceLock::new();
+static METRICS: OnceLock<[FontMetrics; 20]> = OnceLock::new();
 
 impl FontMetrics {
     fn parse_face(bytes: &'static [u8]) -> FontMetrics {
@@ -289,7 +323,7 @@ impl FontMetrics {
         }
     }
 
-    fn all() -> &'static [FontMetrics; 19] {
+    fn all() -> &'static [FontMetrics; 20] {
         METRICS.get_or_init(|| Face::ALL.map(|f| Self::parse_face(f.bytes())))
     }
 

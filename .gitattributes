@@ -1,0 +1,10 @@
+# Keep pinned engine assets byte-identical across platforms so their
+# documented SHA-256 hashes (the contract identities) always match.
+*.ttf binary
+*.otf binary
+*.vsd binary
+*.vsdp binary
+*.png binary
+# Text assets embedded by include_str! (hyphenation patterns, ICU word
+# lists, mirroring data): never convert line endings.
+crates/vsd-layout/assets/*.txt -text

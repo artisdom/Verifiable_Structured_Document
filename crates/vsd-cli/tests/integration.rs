@@ -1836,3 +1836,109 @@ fn engine_1_6_shapes_and_breaks_thai() {
         Err(vsd_layout::LayoutError::Unsupported(_))
     ));
 }
+
+/// Engine 1.7 lays out CJK (Han/kana/Hangul) in the pinned pan-CJK face,
+/// per glyph, with inter-ideograph line breaking. On a narrow page a
+/// spaceless Chinese paragraph must wrap, each line within the content
+/// box, logical text preserved; raster and (CFF) PDF export both accept
+/// it; engine 1.6 still refuses CJK.
+#[test]
+fn engine_1_7_lays_out_and_breaks_cjk() {
+    use vsd_core::layout::DisplayOp;
+    use vsd_layout::{EngineVersion, LayoutOptions, RecomputeOutcome};
+
+    // Spaceless Chinese, plus Japanese and Korean to exercise the whole
+    // pan-CJK face.
+    let zh = "这是一个用于测试中日韩文字排版的段落它没有空格但可以在表意文字之间换行";
+    let doc = DocumentBuilder::new(Node::Doc(Doc {
+        lang: "zh".into(),
+        dir: Direction::Ltr,
+        children: vec![
+            Node::Para(Para {
+                children: vec![Inline::Text(zh.into())],
+            }),
+            Node::Para(Para {
+                children: vec![Inline::Text("日本語と한국어".into())],
+            }),
+        ],
+    }))
+    .build()
+    .unwrap();
+
+    let opts = LayoutOptions {
+        page_width_um: 60_000,
+        page_height_um: 200_000,
+        engine: EngineVersion::V1_7,
+    };
+    let content_w_mm = 60.0 - 2.0 * 20.0;
+    let pages = vsd_layout::layout_document(&doc, &opts).unwrap();
+
+    // CJK is emitted as plain text runs in the CJK face (19), not shaped.
+    let mut cjk_runs = 0usize;
+    let mut joined = String::new();
+    let mut zh_lines = 0usize;
+    for op in pages.iter().flat_map(|p| &p.ops) {
+        match op {
+            DisplayOp::TextRun {
+                font,
+                text,
+                size_pt,
+                ..
+            } if *font == 19 => {
+                let m = vsd_layout::font::FontMetrics::face_metrics(vsd_layout::font::Face::Cjk);
+                let size_um = (size_pt * 25400.0 / 72.0) as i64;
+                let w_mm: f64 = text
+                    .chars()
+                    .map(|c| m.char_advance_um(c, size_um) as f64)
+                    .sum::<f64>()
+                    / 1000.0;
+                assert!(w_mm <= content_w_mm + 0.5, "CJK line too wide: {w_mm} mm");
+                assert!(text.chars().all(|c| m.glyph(c).0 != 0), "no .notdef");
+                joined.push_str(text);
+                cjk_runs += 1;
+                if zh.contains(text.as_str()) {
+                    zh_lines += 1;
+                }
+            }
+            // No GlyphRun: CJK is not shaped.
+            DisplayOp::GlyphRun { .. } => panic!("CJK must not be shaped"),
+            _ => {}
+        }
+    }
+    assert!(cjk_runs >= 2, "CJK must produce multiple runs");
+    assert!(
+        zh_lines >= 2,
+        "the Chinese paragraph must wrap to >=2 lines"
+    );
+    assert!(joined.contains('这') && joined.contains('日') && joined.contains('한'));
+
+    // Cache pins 1.7.0 and recomputes byte-identically.
+    let laid = vsd_layout::add_render_cache(&doc, &opts).unwrap();
+    let cache = laid.render_cache().unwrap().unwrap();
+    assert_eq!(cache.engine_version, "1.7.0");
+    assert!(matches!(
+        vsd_layout::verify_render_cache(&laid).unwrap(),
+        RecomputeOutcome::Match { .. }
+    ));
+
+    // Raster + tagged-PDF export accept the CJK (CFF) face. The PDF must
+    // embed the CFF as a CIDFontType0 / FontFile3.
+    let page = vsd_core::layout::Page::from_value(&laid.store.get_value(&cache.pages[0]).unwrap())
+        .unwrap();
+    assert!(!vsd_render::render_page_png(&laid, &page, 96.0)
+        .unwrap()
+        .is_empty());
+    let pdf = vsd_pdf::export_pdf(&laid, None, &vsd_pdf::ExportOptions::default()).unwrap();
+    assert!(!pdf.is_empty());
+    let pdf_str = String::from_utf8_lossy(&pdf);
+    assert!(
+        pdf_str.contains("/CIDFontType0") && pdf_str.contains("/FontFile3"),
+        "CJK PDF must embed the CFF via CIDFontType0 / FontFile3"
+    );
+
+    // Frozen contract: engine 1.6 refuses CJK (it had no CJK font).
+    assert!(matches!(
+        vsd_layout::layout_document(&doc, &opts.with_engine(EngineVersion::V1_6)),
+        Err(vsd_layout::LayoutError::Unsupported(_))
+    ));
+}

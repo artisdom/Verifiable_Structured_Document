@@ -209,13 +209,17 @@ shaping via a pinned pure-Rust HarfBuzz port, emitting the `glyphs` op),
 adds the remaining major Brahmic scripts — Bengali, Gurmukhi, Gujarati,
 Oriya, Tamil, Telugu, Kannada, Malayalam, Sinhala — and UAX #9 bidi
 mirroring of `Bidi_Mirrored` characters in RTL runs; reuses the `glyphs`
-op, no display-list format change), and `vsd-layout/1.6.0`
+op, no display-list format change), `vsd-layout/1.6.0`
 ([docs/LAYOUT-1.6.md](../docs/LAYOUT-1.6.md), adds Thai + Lao with
 dictionary-based line breaking over pinned ICU word lists, since those
 scripts have no inter-word spaces; reuses the `glyphs` op, no format
-change; still refuses CJK). Each engine version is frozen: the
-conformance corpus pins one golden vector per version and a conforming
-reader MUST reproduce all of them.
+change), and `vsd-layout/1.7.0`
+([docs/LAYOUT-1.7.md](../docs/LAYOUT-1.7.md), adds CJK — Han, kana,
+Hangul — in horizontal writing, rendered per glyph from a pinned pan-CJK
+CFF face with inter-ideograph line breaking; no format change; vertical
+writing mode is a separate future version). Each engine version is
+frozen: the conformance corpus pins one golden vector per version and a
+conforming reader MUST reproduce all of them.
 
 ## 8. (reserved)
 

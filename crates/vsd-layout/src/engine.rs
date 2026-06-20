@@ -73,6 +73,12 @@ pub enum EngineVersion {
     /// inter-word spaces) over pinned ICU word lists. No format change.
     /// Everything else identical to 1.5; CJK is still refused.
     V1_6,
+    /// LAYOUT-1.7.md — CJK (Han, kana, Hangul) in the pinned pan-CJK
+    /// face, rendered per glyph (not shaped) with **inter-ideograph line
+    /// breaking** (a break is permitted between adjacent CJK characters,
+    /// modulo simple kinsoku). Horizontal writing only; no format change.
+    /// Everything else identical to 1.6.
+    V1_7,
 }
 
 impl EngineVersion {
@@ -85,6 +91,7 @@ impl EngineVersion {
             EngineVersion::V1_4 => "1.4.0",
             EngineVersion::V1_5 => "1.5.0",
             EngineVersion::V1_6 => "1.6.0",
+            EngineVersion::V1_7 => "1.7.0",
         }
     }
 
@@ -97,6 +104,7 @@ impl EngineVersion {
             "1.4.0" => Some(EngineVersion::V1_4),
             "1.5.0" => Some(EngineVersion::V1_5),
             "1.6.0" => Some(EngineVersion::V1_6),
+            "1.7.0" => Some(EngineVersion::V1_7),
             _ => None,
         }
     }
@@ -107,12 +115,14 @@ impl EngineVersion {
             EngineVersion::V1_1 => crate::text::StylePolicy::V1_1,
             // 1.3 adds no new style flags; it reuses the 1.2 policy.
             EngineVersion::V1_2 | EngineVersion::V1_3 => crate::text::StylePolicy::V1_2,
-            // 1.5/1.6 add no new style flags either (mirroring, the new
-            // shaped scripts, and dictionary breaking are not style-table
-            // behaviors; shaped scripts are routed by `script_fallback`).
-            EngineVersion::V1_4 | EngineVersion::V1_5 | EngineVersion::V1_6 => {
-                crate::text::StylePolicy::V1_4
-            }
+            // 1.5/1.6/1.7 add no new style flags either (mirroring, the
+            // new shaped scripts, dictionary/CJK breaking are not
+            // style-table behaviors; non-Latin faces are routed by
+            // `script_fallback`).
+            EngineVersion::V1_4
+            | EngineVersion::V1_5
+            | EngineVersion::V1_6
+            | EngineVersion::V1_7 => crate::text::StylePolicy::V1_4,
         }
     }
 
@@ -131,14 +141,22 @@ impl EngineVersion {
     fn hyphenate(self) -> bool {
         matches!(
             self,
-            EngineVersion::V1_3 | EngineVersion::V1_4 | EngineVersion::V1_5 | EngineVersion::V1_6
+            EngineVersion::V1_3
+                | EngineVersion::V1_4
+                | EngineVersion::V1_5
+                | EngineVersion::V1_6
+                | EngineVersion::V1_7
         )
     }
 
     fn widow_orphan(self) -> bool {
         matches!(
             self,
-            EngineVersion::V1_3 | EngineVersion::V1_4 | EngineVersion::V1_5 | EngineVersion::V1_6
+            EngineVersion::V1_3
+                | EngineVersion::V1_4
+                | EngineVersion::V1_5
+                | EngineVersion::V1_6
+                | EngineVersion::V1_7
         )
     }
 
@@ -159,7 +177,7 @@ impl EngineVersion {
             // 1.5 shapes every Brahmic script in the map *except* Thai/Lao
             // (which need dictionary line breaking — added in 1.6).
             EngineVersion::V1_5 => !matches!(f, Face::Thai | Face::Lao),
-            EngineVersion::V1_6 => true,
+            EngineVersion::V1_6 | EngineVersion::V1_7 => true,
         };
         shaped.then_some(f)
     }
@@ -167,13 +185,22 @@ impl EngineVersion {
     /// Mirror `Bidi_Mirrored` characters in right-to-left runs (engine
     /// 1.5+, UAX #9 HL6).
     fn mirror(self) -> bool {
-        matches!(self, EngineVersion::V1_5 | EngineVersion::V1_6)
+        matches!(
+            self,
+            EngineVersion::V1_5 | EngineVersion::V1_6 | EngineVersion::V1_7
+        )
     }
 
     /// Use dictionary-based line breaking for spaceless scripts
-    /// (Thai/Lao, engine 1.6).
+    /// (Thai/Lao, engine 1.6+).
     fn dict_break(self) -> bool {
-        matches!(self, EngineVersion::V1_6)
+        matches!(self, EngineVersion::V1_6 | EngineVersion::V1_7)
+    }
+
+    /// Lay out CJK (Han/kana/Hangul) instead of refusing it, with
+    /// inter-ideograph line breaking (engine 1.7).
+    fn allows_cjk(self) -> bool {
+        matches!(self, EngineVersion::V1_7)
     }
 }
 
@@ -221,7 +248,7 @@ impl Default for LayoutOptions {
         LayoutOptions {
             page_width_um: 210_000,
             page_height_um: 297_000,
-            engine: EngineVersion::V1_6,
+            engine: EngineVersion::V1_7,
         }
     }
 }
@@ -793,6 +820,11 @@ impl Engine<'_> {
             if self.opts.engine.shaped_face(c).is_some() {
                 continue;
             }
+            // CJK (engine 1.7): laid out per glyph in the pinned pan-CJK
+            // face rather than refused.
+            if self.opts.engine.allows_cjk() && crate::font::is_cjk(c) {
+                continue;
+            }
             if let Some(what) = refused_script(c) {
                 return Err(LayoutError::Unsupported(format!(
                     "engine {} cannot faithfully lay out {what}; \
@@ -927,14 +959,20 @@ impl Engine<'_> {
         } else {
             None
         };
-        // Dictionary break opportunities for spaceless scripts (Thai/Lao,
-        // engine 1.6). Empty otherwise, so the breaker is unchanged.
-        let dict_breaks = if self.opts.engine.dict_break() {
-            dict_breaks_for(&lt.text)
-        } else {
-            Vec::new()
-        };
-        let lines = break_lines_hyphenated(lt, size_um, width.max(1), hyph, &dict_breaks);
+        // Extra (zero-width) break opportunities for spaceless scripts:
+        // dictionary boundaries for Thai/Lao (engine 1.6) and
+        // inter-ideograph boundaries for CJK (engine 1.7). Empty
+        // otherwise, so the breaker is byte-identical to earlier engines.
+        let mut extra_breaks = Vec::new();
+        if self.opts.engine.dict_break() {
+            extra_breaks.extend(dict_breaks_for(&lt.text));
+        }
+        if self.opts.engine.allows_cjk() {
+            extra_breaks.extend(cjk_break_points(&lt.text));
+        }
+        extra_breaks.sort_unstable();
+        extra_breaks.dedup();
+        let lines = break_lines_hyphenated(lt, size_um, width.max(1), hyph, &extra_breaks);
         let justify = justify && self.opts.engine.justify();
         lines
             .iter()
@@ -1463,6 +1501,82 @@ fn dict_breaks_for(text: &str) -> Vec<usize> {
         }
     }
     breaks
+}
+
+/// Inter-ideograph line-break opportunities for CJK (engine 1.7), as
+/// absolute byte offsets in `text`, ascending. A break is permitted at
+/// the boundary between two characters when at least one is CJK and the
+/// boundary does not violate simple kinsoku: never break *after* an
+/// opening bracket, nor *before* a closing bracket or trailing
+/// punctuation. Boundaries adjacent to whitespace are left to the normal
+/// space-based breaker. Both Han runs and CJK/Latin transitions become
+/// break points; runs of Latin (no CJK either side) do not.
+fn cjk_break_points(text: &str) -> Vec<usize> {
+    let chars: Vec<(usize, char)> = text.char_indices().collect();
+    let mut breaks = Vec::new();
+    for pair in chars.windows(2) {
+        let (_, l) = pair[0];
+        let (rj, r) = pair[1];
+        if l.is_whitespace() || r.is_whitespace() {
+            continue;
+        }
+        if !(crate::font::is_cjk(l) || crate::font::is_cjk(r)) {
+            continue;
+        }
+        if cjk_no_break_after(l) || cjk_no_break_before(r) {
+            continue;
+        }
+        breaks.push(rj);
+    }
+    breaks
+}
+
+/// A character that must not end a line (no break immediately after) —
+/// opening brackets/quotes (kinsoku).
+fn cjk_no_break_after(c: char) -> bool {
+    matches!(
+        c,
+        '(' | '['
+            | '{'
+            | '\u{3008}'
+            | '\u{300A}'
+            | '\u{300C}'
+            | '\u{300E}'
+            | '\u{3010}'
+            | '\u{3014}'
+            | '\u{3016}'
+            | '\u{ff08}'
+            | '\u{ff3b}'
+            | '\u{ff5b}'
+    )
+}
+
+/// A character that must not begin a line (no break immediately before) —
+/// closing brackets/quotes and trailing punctuation (kinsoku).
+fn cjk_no_break_before(c: char) -> bool {
+    matches!(
+        c,
+        ')' | ']'
+            | '}'
+            | '\u{3001}'
+            | '\u{3002}'
+            | '\u{3009}'
+            | '\u{300B}'
+            | '\u{300D}'
+            | '\u{300F}'
+            | '\u{3011}'
+            | '\u{3015}'
+            | '\u{3017}'
+            | '\u{ff01}'
+            | '\u{ff09}'
+            | '\u{ff0c}'
+            | '\u{ff0e}'
+            | '\u{ff1a}'
+            | '\u{ff1b}'
+            | '\u{ff1f}'
+            | '\u{ff3d}'
+            | '\u{ff5d}'
+    )
 }
 
 /// Emit one homogeneous segment `[s, e)` at absolute x `x`. A shaped
