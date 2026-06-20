@@ -1153,7 +1153,12 @@ fn engine_1_2_refuses_unsupported_scripts() {
             })],
         });
         let doc = DocumentBuilder::new(root).build().unwrap();
-        let err = vsd_layout::layout_document(&doc, &LayoutOptions::default());
+        // Pin engine 1.2: it refuses all three (1.4 shapes Arabic and
+        // Devanagari, so the default would accept two of them).
+        let err = vsd_layout::layout_document(
+            &doc,
+            &LayoutOptions::default().with_engine(EngineVersion::V1_2),
+        );
         assert!(
             matches!(err, Err(vsd_layout::LayoutError::Unsupported(_))),
             "engine 1.2 must refuse {sample:?}"
@@ -1284,10 +1289,11 @@ fn engine_1_3_hyphenates_english_body_only() {
         .build()
         .unwrap()
     };
-    // Narrow A6-ish page so long words must hyphenate.
+    // Narrow A6-ish page so long words must hyphenate. Pin engine 1.3
+    // (the default is newer); hyphenation behaves identically there.
     let opts = LayoutOptions {
         page_width_um: 90_000,
-        ..LayoutOptions::default()
+        ..LayoutOptions::default().with_engine(EngineVersion::V1_3)
     };
     assert_eq!(opts.engine.as_str(), "1.3.0");
 
@@ -1441,4 +1447,153 @@ fn engine_1_3_widow_orphan_keeps_two_lines_together() {
         v12_strands,
         "expected engine 1.2 to strand a line so 1.3 can be shown to fix it"
     );
+}
+
+/// Engine 1.4 (LAYOUT-1.4.md): Arabic and Devanagari are shaped by the
+/// pinned shaper into positioned `GlyphRun`s (format 0.4) rather than
+/// refused. Logical text is preserved for extraction; the cache pins
+/// 1.4.0 and recomputes byte-identically; engine 1.2 still refuses.
+#[test]
+fn engine_1_4_shapes_arabic_and_devanagari() {
+    use vsd_core::layout::DisplayOp;
+    use vsd_layout::{EngineVersion, LayoutOptions, RecomputeOutcome};
+
+    let arabic = "العربية";
+    let deva = "नमस्ते";
+    // One LTR document mixing English with both complex scripts.
+    let doc = DocumentBuilder::new(Node::Doc(Doc {
+        lang: "en".into(),
+        dir: Direction::Ltr,
+        children: vec![Node::Para(Para {
+            children: vec![Inline::Text(format!(
+                "Arabic {arabic} and Devanagari {deva}."
+            ))],
+        })],
+    }))
+    .build()
+    .unwrap();
+
+    let opts = LayoutOptions::default();
+    assert_eq!(opts.engine.as_str(), "1.4.0");
+    let pages = vsd_layout::layout_document(&doc, &opts).unwrap();
+    let glyph_runs: Vec<(&u64, &String, usize)> = pages
+        .iter()
+        .flat_map(|p| &p.ops)
+        .filter_map(|op| match op {
+            DisplayOp::GlyphRun {
+                font, glyphs, text, ..
+            } => Some((font, text, glyphs.len())),
+            _ => None,
+        })
+        .collect();
+    // The Arabic run is shaped in the Arabic face (6), the Devanagari in
+    // the Devanagari face (7); both carry real glyphs and logical text.
+    let ar = glyph_runs
+        .iter()
+        .find(|(f, ..)| **f == 6)
+        .expect("arabic glyph run");
+    assert!(ar.2 > 0 && ar.1.contains(arabic));
+    let dv = glyph_runs
+        .iter()
+        .find(|(f, ..)| **f == 7)
+        .expect("devanagari glyph run");
+    assert!(dv.2 > 0 && dv.1.contains(deva));
+    // The surrounding English is still simple text runs.
+    assert!(pages
+        .iter()
+        .flat_map(|p| &p.ops)
+        .any(|op| matches!(op, DisplayOp::TextRun { text, .. } if text.contains("Arabic"))));
+    // Every shaped glyph is real (font + shaper agree) with a valid
+    // cluster into its run text.
+    for op in pages.iter().flat_map(|p| &p.ops) {
+        if let DisplayOp::GlyphRun { glyphs, text, .. } = op {
+            assert!(glyphs.iter().all(|g| g.gid != 0));
+            assert!(glyphs.iter().all(|g| (g.cluster as usize) < text.len()));
+        }
+    }
+
+    // The cache pins 1.4.0 and recomputes byte-identically (shaping is
+    // deterministic), and round-trips through the container/codec.
+    let laid = vsd_layout::add_render_cache(&doc, &opts).unwrap();
+    let cache = laid.render_cache().unwrap().unwrap();
+    assert_eq!(cache.engine_version, "1.4.0");
+    assert!(matches!(
+        vsd_layout::verify_render_cache(&laid).unwrap(),
+        RecomputeOutcome::Match { .. }
+    ));
+    // The GlyphRun page object survives a CBOR encode/decode round trip.
+    let page = vsd_core::layout::Page::from_value(&laid.store.get_value(&cache.pages[0]).unwrap())
+        .unwrap();
+    assert_eq!(
+        page.to_value().encode().unwrap(),
+        vsd_core::layout::Page::from_value(&page.to_value())
+            .unwrap()
+            .to_value()
+            .encode()
+            .unwrap()
+    );
+
+    // Raster and tagged-PDF export both accept the shaped runs.
+    assert!(!vsd_render::render_page_png(&laid, &page, 96.0)
+        .unwrap()
+        .is_empty());
+    assert!(
+        !vsd_pdf::export_pdf(&laid, None, &vsd_pdf::ExportOptions::default())
+            .unwrap()
+            .is_empty()
+    );
+
+    // Frozen contract: engine 1.2 still refuses these scripts.
+    assert!(matches!(
+        vsd_layout::layout_document(&doc, &opts.with_engine(EngineVersion::V1_2)),
+        Err(vsd_layout::LayoutError::Unsupported(_))
+    ));
+}
+
+/// A right-to-left Arabic document right-aligns its shaped line and the
+/// glyphs come back in visual order (first glyph maps to a later source
+/// cluster than the last — the hallmark of RTL visual reordering).
+#[test]
+fn engine_1_4_arabic_rtl_is_visually_ordered() {
+    use vsd_core::layout::DisplayOp;
+    use vsd_layout::font::{Face, FontMetrics};
+    use vsd_layout::LayoutOptions;
+
+    let doc = DocumentBuilder::new(Node::Doc(Doc {
+        lang: "ar".into(),
+        dir: Direction::Rtl,
+        children: vec![Node::Para(Para {
+            children: vec![Inline::Text("العربية لغة جميلة".into())],
+        })],
+    }))
+    .build()
+    .unwrap();
+    let pages = vsd_layout::layout_document(&doc, &LayoutOptions::default()).unwrap();
+    let mut right_edge = f64::NEG_INFINITY;
+    let mut saw_visual_reorder = false;
+    for op in pages.iter().flat_map(|p| &p.ops) {
+        if let DisplayOp::GlyphRun {
+            x, font, glyphs, ..
+        } = op
+        {
+            assert_eq!(Face::from_index(*font), Face::Arabic);
+            let w: f64 = glyphs.iter().map(|g| g.x_advance).sum();
+            right_edge = right_edge.max(x + w);
+            // In an RTL run the leftmost (first) glyph is a logically
+            // later character than the rightmost (last) glyph.
+            if let (Some(first), Some(last)) = (glyphs.first(), glyphs.last()) {
+                if first.cluster > last.cluster {
+                    saw_visual_reorder = true;
+                }
+            }
+        }
+    }
+    assert!(saw_visual_reorder, "RTL run must be in visual order");
+    // A4 content right edge = 210 − 20 mm margin.
+    assert!(
+        (right_edge - 190.0).abs() < 0.5,
+        "rtl shaped line must sit at the right margin, got {right_edge}"
+    );
+    // Sanity: the Arabic face actually has the metrics we scaled with.
+    assert!(FontMetrics::face_metrics(Face::Arabic).upem > 0);
 }

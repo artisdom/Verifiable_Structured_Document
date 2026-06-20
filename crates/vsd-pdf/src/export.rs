@@ -71,13 +71,31 @@ pub fn export_pdf(
     let mut used: BTreeMap<Face, BTreeMap<u16, char>> = BTreeMap::new();
     for page in &pages {
         for op in &page.ops {
-            if let DisplayOp::TextRun { font, text, .. } = op {
-                let face = Face::from_index(*font);
-                let metrics = FontMetrics::face_metrics(face);
-                let gids = used.entry(face).or_default();
-                for c in text.chars().filter(|c| !c.is_control()) {
-                    gids.entry(metrics.glyph(c).0).or_insert(c);
+            match op {
+                DisplayOp::TextRun { font, text, .. } => {
+                    let face = Face::from_index(*font);
+                    let metrics = FontMetrics::face_metrics(face);
+                    let gids = used.entry(face).or_default();
+                    for c in text.chars().filter(|c| !c.is_control()) {
+                        gids.entry(metrics.glyph(c).0).or_insert(c);
+                    }
                 }
+                // Shaped runs carry glyph ids directly; ToUnicode maps
+                // each gid to the source character at its cluster byte.
+                DisplayOp::GlyphRun {
+                    font, glyphs, text, ..
+                } => {
+                    let face = Face::from_index(*font);
+                    let gids = used.entry(face).or_default();
+                    for g in glyphs {
+                        let c = text[g.cluster as usize..]
+                            .chars()
+                            .next()
+                            .unwrap_or('\u{fffd}');
+                        gids.entry(g.gid).or_insert(c);
+                    }
+                }
+                _ => {}
             }
         }
     }
@@ -274,6 +292,46 @@ fn page_content(
                     x * PT_PER_MM,
                     h_pt - y * PT_PER_MM,
                 );
+                records.push(McRecord {
+                    mcid,
+                    tag,
+                    node_path: node_path.clone(),
+                    alt: None,
+                });
+                mcid += 1;
+            }
+            DisplayOp::GlyphRun {
+                x,
+                y,
+                font,
+                size_pt,
+                color,
+                glyphs,
+                node_path,
+                ..
+            } => {
+                // Pre-shaped run: place each glyph by id at its shaped
+                // position. Advances/offsets are already baked in, so we
+                // set an explicit text position per glyph rather than
+                // relying on the font's default advances.
+                let face = Face::from_index(*font);
+                let tag = struct_tag(doc, root, node_path);
+                let baseline = h_pt - y * PT_PER_MM;
+                let _ = write!(
+                    s,
+                    "/{tag} << /MCID {mcid} >> BDC {} BT /F{} {:.3} Tf",
+                    rg(*color),
+                    face.index(),
+                    size_pt
+                );
+                let mut pen = *x;
+                for g in glyphs {
+                    let gx = (pen + g.x_offset) * PT_PER_MM;
+                    let gy = baseline + g.y_offset * PT_PER_MM;
+                    let _ = write!(s, " 1 0 0 1 {gx:.3} {gy:.3} Tm <{:04x}> Tj", g.gid);
+                    pen += g.x_advance;
+                }
+                let _ = writeln!(s, " ET EMC");
                 records.push(McRecord {
                     mcid,
                     tag,

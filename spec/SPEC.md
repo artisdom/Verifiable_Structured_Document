@@ -1,6 +1,6 @@
 # VSD — Verifiable Structured Document
 
-## Format Specification, version 0.3 (1.0-track draft)
+## Format Specification, version 0.4 (1.0-track draft)
 
 **License:** This specification is published under [CC-BY 4.0](https://creativecommons.org/licenses/by/4.0/).
 The reference implementation is Apache-2.0.
@@ -179,9 +179,14 @@ ops `text` (x, y baseline, font uint, size pt, color RGBA bytes4, text,
 added in 0.3 — an optional `rtl` bool: the run's `text` is stored in
 logical order and consumers draw its glyphs right-to-left starting at
 `x`, the run's left edge; omitted when false, so pre-0.3 pages decode
-unchanged), `image` (x,y,w,h,res), `rect` (x,y,w,h,fill). Positions are
-mm floats produced by exact integer→float conversion (see the layout
-contract).
+unchanged), `image` (x,y,w,h,res), `rect` (x,y,w,h,fill), and — added in 0.4 —
+`glyphs`: a pre-shaped complex-script run carrying positioned glyphs
+`g` (each `[gid, x_advance, x_offset, y_offset, cluster]`) in visual
+order plus the logical `text`, `src`, and `range`. Consumers draw the
+glyphs by id (needing no shaper) while selection/search/extraction use
+the logical `text`; `cluster` is the source byte offset of each glyph.
+Positions are mm floats produced by exact integer→float conversion (see
+the layout contract).
 
 Verification levels: (1) structural — `layout-hash` matches the page
 list, pages decode; (2) **recomputation** — re-run the named engine *at
@@ -194,12 +199,15 @@ Reference contracts: `vsd-layout/1.0.0`
 ([docs/LAYOUT-1.1.md](../docs/LAYOUT-1.1.md), adds bold/italic faces),
 `vsd-layout/1.2.0` ([docs/LAYOUT-1.2.md](../docs/LAYOUT-1.2.md),
 adds monospace, underline, justification, and Hebrew bidi; refuses
-scripts it cannot set faithfully), and `vsd-layout/1.3.0`
+scripts it cannot set faithfully), `vsd-layout/1.3.0`
 ([docs/LAYOUT-1.3.md](../docs/LAYOUT-1.3.md), adds Knuth–Liang
-hyphenation of English body text and widow/orphan control — a
-layout-engine version with no display-list format change). Each engine
-version is frozen: the conformance corpus pins one golden vector per
-version and a conforming reader MUST reproduce all of them.
+hyphenation of English body text and widow/orphan control — no
+display-list format change), and `vsd-layout/1.4.0`
+([docs/LAYOUT-1.4.md](../docs/LAYOUT-1.4.md), adds Arabic + Devanagari
+shaping via a pinned pure-Rust HarfBuzz port, emitting the `glyphs` op;
+still refuses CJK / Thai / other complex scripts). Each engine version
+is frozen: the conformance corpus pins one golden vector per version and
+a conforming reader MUST reproduce all of them.
 
 ## 8. (reserved)
 
@@ -338,7 +346,8 @@ strings); strict readers of an older minor will reject documents using
 newer constructs — by design, never mis-render. History: 0.1 initial;
 0.2 added `salted` (§11.2) and `field-layer` (§9.2),
 `hybrid-ed25519-ml-dsa-65` (§10.2); 0.3 added the `rtl` flag on `text`
-display ops (§7).
+display ops (§7); 0.4 added the `glyphs` display op for pre-shaped
+complex-script runs (§7).
 
 ## 16. Registries
 

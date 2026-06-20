@@ -43,7 +43,7 @@ four properties that matter and removes the failure modes by construction:
 | [`vsd-core`](crates/vsd-core) | Deterministic CBOR (RFC 8949 §4.2, strict both ways) · content-addressed object store · content tree · manifest & profiles · validation · destructive redaction · forms + fill/flatten · object-set diff · render-layer types. `no_std + alloc` capable. |
 | [`vsd-container`](crates/vsd-container) | The `.vsd` chunk container: 32-byte header, BLAKE3-checksummed chunks, object index, signature blocks, trailer; zstd optional; lazy `StreamReader` for ranged access |
 | [`vsd-sign`](crates/vsd-sign) | Ed25519 signatures over document/subtree Merkle roots, with domain separation (wire format reserves `ecdsa-p256`, `ml-dsa-65`) |
-| [`vsd-layout`](crates/vsd-layout) | The reference layout engine (versions **1.0–1.3**, each an immutable contract): a deterministic projection from content tree to display lists — integer-µm arithmetic, six pinned Noto faces, pinned hyphenation patterns, normative contracts in [docs/LAYOUT-1.0.md](docs/LAYOUT-1.0.md)…[1.3.md](docs/LAYOUT-1.3.md) |
+| [`vsd-layout`](crates/vsd-layout) | The reference layout engine (versions **1.0–1.4**, each an immutable contract): a deterministic projection from content tree to display lists — integer-µm arithmetic, eight pinned Noto faces, pinned hyphenation patterns + pinned shaper (rustybuzz), normative contracts in [docs/LAYOUT-1.0.md](docs/LAYOUT-1.0.md)…[1.4.md](docs/LAYOUT-1.4.md) |
 | [`vsd-render`](crates/vsd-render) | Rasterizer: display-list pages → PNG via tiny-skia, drawing with the same pinned font the engine measured with |
 | [`vsd-pdf`](crates/vsd-pdf) | PDF interop: deterministic **tagged** PDF export with the canonical `.vsd` embedded (hybrid PDF — round trips losslessly, verifiable by document id); import with hybrid recovery + pluggable structure recovery for foreign PDFs |
 | [`vsd-tlog`](crates/vsd-tlog) | Transparency log: RFC 6962-style Merkle tree over document ids — inclusion + consistency proofs, signed tree heads ("this contract existed, in exactly this form, at this time") |
@@ -357,13 +357,24 @@ CLI.
   change; the 1.0/1.1/1.2 golden layout hashes are byte-for-byte
   unchanged.
 
+**Implemented (v0.14 — engine 1.4 shaped scripts):**
+
+- **Arabic + Devanagari shaping** (contract in
+  [docs/LAYOUT-1.4.md](docs/LAYOUT-1.4.md)): real HarfBuzz-class shaping
+  via the pinned pure-Rust `rustybuzz` over two pinned fonts. Arabic
+  joins right-to-left; Devanagari reorders matras and forms conjuncts.
+  Shaping runs once in the engine and is emitted as the new format-0.4
+  `glyphs` display op — positioned glyphs in visual order, with the
+  **logical** text/cluster retained so selection, search, extraction,
+  and disclosure still operate on source text. Deterministic (pinned
+  shaper, integer font units); the 1.0–1.3 golden hashes are unchanged.
+
 **Not yet implemented (the honest list):**
 
-- Layout engine widening (engine 1.4+): Arabic/Indic shaping (needs a
-  pinned pure-Rust shaper plus a positioned-glyph display list — the
-  next major engine effort), CJK, vertical text, Thai/Lao dictionary
-  breaking, multi-column, MathML layout. The engine refuses what it
-  cannot lay out rather than mis-rendering it.
+- Layout engine widening (engine 1.5+): CJK + vertical text (needs CJK
+  fonts and breaking rules), Thai/Lao dictionary line breaking, other
+  Indic/complex scripts, multi-column, MathML layout. The engine refuses
+  what it cannot lay out rather than mis-rendering it.
 - Python/TypeScript authoring bindings; Pandoc/Typst backends;
   viewer-integrated form filling; a browser text-selection layer.
 - PDF/A-2b export mode; foreign tagged-PDF structure-tree import; richer

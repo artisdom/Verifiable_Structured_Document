@@ -100,6 +100,34 @@ pub fn page_highlights(page: &Page, query: &str) -> Vec<Highlight> {
     let needle = query.to_lowercase();
     let mut out = Vec::new();
     for op in &page.ops {
+        // Shaped runs (engine 1.4): glyph geometry is not re-measurable
+        // without the shaper, so a match highlights the whole run (run
+        // granularity), using the run's logical text and total advance.
+        if let DisplayOp::GlyphRun {
+            x,
+            y,
+            font,
+            size_pt,
+            glyphs,
+            text,
+            ..
+        } = op
+        {
+            if text.to_lowercase().contains(&needle) {
+                let face = vsd_layout::font::Face::from_index(*font);
+                let fm = FontMetrics::face_metrics(face);
+                let ascent_mm = fm.ascent_units as f64 * size_pt / fm.upem as f64 * PT_TO_MM;
+                let descent_mm = -fm.descent_units as f64 * size_pt / fm.upem as f64 * PT_TO_MM;
+                let w_mm: f64 = glyphs.iter().map(|g| g.x_advance).sum();
+                out.push(Highlight {
+                    x_mm: *x,
+                    y_mm: y - ascent_mm,
+                    w_mm,
+                    h_mm: ascent_mm + descent_mm,
+                });
+            }
+            continue;
+        }
         let DisplayOp::TextRun {
             x,
             y,
@@ -156,20 +184,27 @@ pub fn matching_pages(pages: &[Page], query: &str) -> Vec<usize> {
         .collect()
 }
 
-/// Plain text of one page, in paint order (for Ctrl+C).
+/// Plain text of one page, in paint order (for Ctrl+C). Shaped runs
+/// (engine 1.4) contribute their logical `text`, not their glyphs, so
+/// extraction stays correct for Arabic and Devanagari. Inserted
+/// decoration (hyphens, bullets, labels — empty char ranges) is kept,
+/// matching what is visually on the page.
 pub fn page_text(page: &Page) -> String {
     let mut out = String::new();
     let mut last_y = f64::NEG_INFINITY;
     for op in &page.ops {
-        if let DisplayOp::TextRun { y, text, .. } = op {
-            if *y > last_y && !out.is_empty() {
-                out.push('\n');
-            } else if !out.is_empty() && !out.ends_with('\n') {
-                out.push(' ');
-            }
-            out.push_str(text);
-            last_y = *y;
+        let (y, text) = match op {
+            DisplayOp::TextRun { y, text, .. } => (*y, text),
+            DisplayOp::GlyphRun { y, text, .. } => (*y, text),
+            _ => continue,
+        };
+        if y > last_y && !out.is_empty() {
+            out.push('\n');
+        } else if !out.is_empty() && !out.ends_with('\n') {
+            out.push(' ');
         }
+        out.push_str(text);
+        last_y = y;
     }
     out
 }

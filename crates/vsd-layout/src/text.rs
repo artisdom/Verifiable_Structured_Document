@@ -43,6 +43,10 @@ impl StylePolicy {
         underline: true,
         script_fallback: true,
     };
+    /// Engine 1.4 reuses the 1.2 style policy (the shaped scripts it
+    /// adds are routed by `script_fallback`); the shaping itself is not
+    /// a style-table behavior.
+    pub const V1_4: StylePolicy = StylePolicy::V1_2;
 }
 
 /// A block's layout text plus attribution ranges (byte ranges into the
@@ -89,16 +93,43 @@ impl LayoutText {
         FontMetrics::face_metrics(face).char_advance_um('-', size_um)
     }
 
-    /// Exact width of `text[start..end]` in µm: integer sum of scaled
-    /// advances, each char measured in its attributed face.
+    /// Exact width of `text[start..end]` in µm. Simple scripts sum
+    /// scaled per-character advances in their attributed face; shaped
+    /// scripts (Arabic, Devanagari — engine 1.4) are measured by the
+    /// pinned shaper over each maximal same-face run. Both are integer
+    /// micrometers, so the result is platform-identical.
+    ///
+    /// Shaped runs never cross a space (a space resolves to a simple
+    /// face, splitting the run), so each shaped run is a single word —
+    /// measured here exactly as it is shaped at emission.
     pub fn width_um(&self, start: usize, end: usize, size_um: i64) -> i64 {
-        self.text[start..end]
-            .char_indices()
-            .filter(|(_, c)| !c.is_control())
-            .map(|(off, c)| {
-                FontMetrics::face_metrics(self.face_for(start + off, c)).char_advance_um(c, size_um)
-            })
-            .sum()
+        let text = &self.text[start..end];
+        let mut total = 0i64;
+        let mut chars = text.char_indices().peekable();
+        while let Some(&(off, c)) = chars.peek() {
+            let face = self.face_for(start + off, c);
+            if face.is_shaped() {
+                // Extend over the maximal run of this shaped face.
+                let run_start = start + off;
+                let mut run_end = run_start;
+                while let Some(&(o2, c2)) = chars.peek() {
+                    if self.face_for(start + o2, c2) == face {
+                        run_end = start + o2 + c2.len_utf8();
+                        chars.next();
+                    } else {
+                        break;
+                    }
+                }
+                total +=
+                    crate::shape::shape_run(face, &self.text[run_start..run_end], size_um).width_um;
+            } else {
+                if !c.is_control() {
+                    total += FontMetrics::face_metrics(face).char_advance_um(c, size_um);
+                }
+                chars.next();
+            }
+        }
+        total
     }
 }
 

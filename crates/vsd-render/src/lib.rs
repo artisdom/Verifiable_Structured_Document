@@ -17,9 +17,9 @@ use tiny_skia::{
 };
 
 use vsd_core::document::Document;
-use vsd_core::layout::{DisplayOp, Page};
+use vsd_core::layout::{DisplayOp, Glyph, Page};
 use vsd_core::manifest::Blob;
-use vsd_layout::font::{Face, FontMetrics};
+use vsd_layout::font::{Face, FontMetrics, GlyphId};
 
 pub type Result<T> = std::result::Result<T, RenderError>;
 
@@ -67,6 +67,26 @@ pub fn render_page(doc: &Document, page: &Page, dpi: f64) -> Result<Pixmap> {
                     *color,
                     text,
                     *rtl,
+                );
+            }
+            DisplayOp::GlyphRun {
+                x,
+                y,
+                font,
+                size_pt,
+                color,
+                glyphs,
+                ..
+            } => {
+                draw_glyph_run(
+                    &mut pixmap,
+                    *x * ppm,
+                    *y * ppm,
+                    size_pt * dpi / 72.0,
+                    ppm,
+                    Face::from_index(*font),
+                    *color,
+                    glyphs,
                 );
             }
             DisplayOp::Image { x, y, w, h, res } => {
@@ -204,6 +224,53 @@ fn draw_text_run(
             }
         }
         pen_x += metrics.advance_units(gid) as f32 * scale;
+    }
+}
+
+/// Draw a pre-shaped run (engine 1.4): each glyph is placed by id at its
+/// shaped position. Glyphs are already in visual order, so the pen walks
+/// left-to-right accumulating `x_advance`; `x_offset`/`y_offset`
+/// position marks. Advances/offsets are in mm and scaled to pixels by
+/// `ppm`. Outlines come from the same pinned face the shaper measured.
+#[allow(clippy::too_many_arguments)]
+fn draw_glyph_run(
+    pixmap: &mut Pixmap,
+    x: f64,
+    baseline_y: f64,
+    size_px: f64,
+    ppm: f64,
+    typeface: Face,
+    color: [u8; 4],
+    glyphs: &[Glyph],
+) {
+    let metrics = FontMetrics::face_metrics(typeface);
+    let face = metrics.face();
+    let scale = size_px as f32 / metrics.upem as f32;
+
+    let mut paint = Paint::default();
+    paint.set_color(rgba(color));
+    paint.anti_alias = true;
+
+    let mut pen_x = x;
+    for g in glyphs {
+        let mut sink = GlyphSink {
+            pb: PathBuilder::new(),
+            scale,
+            x0: (pen_x + g.x_offset * ppm) as f32,
+            y0: (baseline_y - g.y_offset * ppm) as f32,
+        };
+        if face.outline_glyph(GlyphId(g.gid), &mut sink).is_some() {
+            if let Some(path) = sink.pb.finish() {
+                pixmap.fill_path(
+                    &path,
+                    &paint,
+                    FillRule::Winding,
+                    Transform::identity(),
+                    None,
+                );
+            }
+        }
+        pen_x += g.x_advance * ppm;
     }
 }
 

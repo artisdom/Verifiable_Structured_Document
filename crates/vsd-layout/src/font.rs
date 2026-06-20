@@ -19,11 +19,14 @@ static FONT_ITALIC: &[u8] = include_bytes!("../assets/NotoSans-Italic.ttf");
 static FONT_BOLD_ITALIC: &[u8] = include_bytes!("../assets/NotoSans-BoldItalic.ttf");
 static FONT_MONO: &[u8] = include_bytes!("../assets/NotoSansMono-Regular.ttf");
 static FONT_HEBREW: &[u8] = include_bytes!("../assets/NotoSansHebrew-Regular.ttf");
+static FONT_ARABIC: &[u8] = include_bytes!("../assets/NotoSansArabic-Regular.ttf");
+static FONT_DEVANAGARI: &[u8] = include_bytes!("../assets/NotoSansDevanagari-Regular.ttf");
 
 /// A face of the pinned family. Display lists carry the index in
-/// `TextRun::font`. Engine 1.0 only ever emits `Regular`; 1.1 adds
-/// indices 1–3 (LAYOUT-1.1.md); 1.2 adds Mono and Hebrew
-/// (LAYOUT-1.2.md).
+/// `TextRun::font` / `GlyphRun::font`. Engine 1.0 only ever emits
+/// `Regular`; 1.1 adds indices 1–3 (LAYOUT-1.1.md); 1.2 adds Mono and
+/// Hebrew (LAYOUT-1.2.md); 1.4 adds the shaped scripts Arabic and
+/// Devanagari (LAYOUT-1.4.md), emitted only via `GlyphRun`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Face {
     Regular = 0,
@@ -32,16 +35,20 @@ pub enum Face {
     BoldItalic = 3,
     Mono = 4,
     Hebrew = 5,
+    Arabic = 6,
+    Devanagari = 7,
 }
 
 impl Face {
-    pub const ALL: [Face; 6] = [
+    pub const ALL: [Face; 8] = [
         Face::Regular,
         Face::Bold,
         Face::Italic,
         Face::BoldItalic,
         Face::Mono,
         Face::Hebrew,
+        Face::Arabic,
+        Face::Devanagari,
     ];
 
     pub fn index(self) -> u64 {
@@ -57,8 +64,32 @@ impl Face {
             3 => Face::BoldItalic,
             4 => Face::Mono,
             5 => Face::Hebrew,
+            6 => Face::Arabic,
+            7 => Face::Devanagari,
             _ => Face::Regular,
         }
+    }
+
+    /// The shaped-script face a codepoint requires (engine 1.4), or
+    /// `None` for scripts handled by the simple per-glyph path. Used to
+    /// route runs to the shaper and to pick the embedded font.
+    pub fn shaped_for(c: char) -> Option<Face> {
+        match c {
+            // Arabic, Arabic Supplement, Extended-A, presentation forms.
+            '\u{0600}'..='\u{06FF}'
+            | '\u{0750}'..='\u{077F}'
+            | '\u{08A0}'..='\u{08FF}'
+            | '\u{FB50}'..='\u{FDFF}'
+            | '\u{FE70}'..='\u{FEFF}' => Some(Face::Arabic),
+            // Devanagari (+ extended).
+            '\u{0900}'..='\u{097F}' | '\u{A8E0}'..='\u{A8FF}' => Some(Face::Devanagari),
+            _ => None,
+        }
+    }
+
+    /// Whether this face is shaped via the pinned shaper (engine 1.4).
+    pub fn is_shaped(self) -> bool {
+        matches!(self, Face::Arabic | Face::Devanagari)
     }
 
     pub fn pick(bold: bool, italic: bool) -> Face {
@@ -80,11 +111,15 @@ impl Face {
         }
     }
 
-    /// Per-character script fallback (engine 1.2): Hebrew-block
-    /// codepoints come from the Hebrew face regardless of styling
-    /// (it ships one face in this engine version).
+    /// Per-character script fallback: Hebrew-block codepoints come from
+    /// the Hebrew face (engine 1.2), and shaped-script codepoints from
+    /// their face (Arabic / Devanagari, engine 1.4), regardless of
+    /// styling — each ships one face in this engine version. Latin and
+    /// the other simple scripts keep the styled face `self`.
     pub fn for_char(self, c: char) -> Face {
-        if matches!(c, '\u{0590}'..='\u{05FF}' | '\u{FB1D}'..='\u{FB4F}') {
+        if let Some(shaped) = Face::shaped_for(c) {
+            shaped
+        } else if matches!(c, '\u{0590}'..='\u{05FF}' | '\u{FB1D}'..='\u{FB4F}') {
             Face::Hebrew
         } else {
             self
@@ -100,6 +135,8 @@ impl Face {
             Face::BoldItalic => FONT_BOLD_ITALIC,
             Face::Mono => FONT_MONO,
             Face::Hebrew => FONT_HEBREW,
+            Face::Arabic => FONT_ARABIC,
+            Face::Devanagari => FONT_DEVANAGARI,
         }
     }
 
@@ -111,6 +148,8 @@ impl Face {
             Face::BoldItalic => "NotoSans-BoldItalic",
             Face::Mono => "NotoSansMono-Regular",
             Face::Hebrew => "NotoSansHebrew-Regular",
+            Face::Arabic => "NotoSansArabic-Regular",
+            Face::Devanagari => "NotoSansDevanagari-Regular",
         }
     }
 }
@@ -132,7 +171,7 @@ pub struct FontMetrics {
     pub line_gap_units: i64,
 }
 
-static METRICS: OnceLock<[FontMetrics; 6]> = OnceLock::new();
+static METRICS: OnceLock<[FontMetrics; 8]> = OnceLock::new();
 
 impl FontMetrics {
     fn parse_face(bytes: &'static [u8]) -> FontMetrics {
@@ -146,7 +185,7 @@ impl FontMetrics {
         }
     }
 
-    fn all() -> &'static [FontMetrics; 6] {
+    fn all() -> &'static [FontMetrics; 8] {
         METRICS.get_or_init(|| {
             [
                 Self::parse_face(Face::Regular.bytes()),
@@ -155,6 +194,8 @@ impl FontMetrics {
                 Self::parse_face(Face::BoldItalic.bytes()),
                 Self::parse_face(Face::Mono.bytes()),
                 Self::parse_face(Face::Hebrew.bytes()),
+                Self::parse_face(Face::Arabic.bytes()),
+                Self::parse_face(Face::Devanagari.bytes()),
             ]
         })
     }

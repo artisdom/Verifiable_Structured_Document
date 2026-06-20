@@ -174,6 +174,24 @@ fn gen_vectors() -> Result<()> {
         "note": "engine 1.3 page furniture (LAYOUT-1.3.md): Knuth-Liang hyphenation of English body text (pinned en-US patterns) and widow/orphan control; inserted hyphens carry an empty char_range",
     }));
 
+    // Engine 1.4: complex-script shaping. Arabic (RTL, joining) and
+    // Devanagari (reordering/conjuncts) become positioned GlyphRuns.
+    let shaped = shaped_doc()?;
+    let opts_14 = vsd_layout::LayoutOptions::default().with_engine(vsd_layout::EngineVersion::V1_4);
+    let laid_14 = vsd_layout::add_render_cache(&shaped, &opts_14)?;
+    let laid_14_bytes = write_document(&laid_14, &[], &WriteOptions { compress: false })?;
+    write(&valid.join("laid-out-1.4.vsd"), &laid_14_bytes)?;
+    let cache_14 = laid_14.render_cache()?.expect("cache present");
+    valid_entries.push(json!({
+        "file": "valid/laid-out-1.4.vsd",
+        "doc_id": laid_14.document_id()?.to_hex(),
+        "profile": "core",
+        "layout_engine": "vsd-layout/1.4.0",
+        "layout_hash": hex::encode(cache_14.layout_hash),
+        "layout_pages": cache_14.pages.len(),
+        "note": "engine 1.4 complex-script shaping (LAYOUT-1.4.md): Arabic + Devanagari shaped by the pinned rustybuzz into format-0.4 'glyphs' display ops with logical text preserved for extraction",
+    }));
+
     let (redacted, predecessor_id, proof) = redacted_doc()?;
     let red_bytes = write_document(&redacted, &[], &WriteOptions { compress: false })?;
     write(&valid.join("redacted.vsd"), &red_bytes)?;
@@ -555,6 +573,35 @@ fn furniture_doc() -> Result<Document> {
     Ok(DocumentBuilder::new(root)
         .metadata(Metadata {
             title: Some("VSD conformance: engine 1.3 page furniture".into()),
+            ..Default::default()
+        })
+        .build()?)
+}
+
+/// A document exercising engine 1.4's complex-script shaping: an Arabic
+/// phrase (RTL, joining) and a Devanagari phrase (reordering, conjuncts)
+/// mixed with English, so the golden hash pins the shaped output.
+fn shaped_doc() -> Result<Document> {
+    let root = Node::Doc(Doc {
+        lang: "en".into(),
+        dir: Direction::Ltr,
+        children: vec![
+            Node::Heading(Heading {
+                level: 1,
+                children: vec![Inline::Text("Engine 1.4 shaped scripts".into())],
+            }),
+            Node::Para(Para {
+                children: vec![Inline::Text(
+                    "Arabic العربية لغة جميلة joins contextually, and Devanagari \
+                     नमस्ते मित्र reorders matras and forms conjuncts."
+                        .into(),
+                )],
+            }),
+        ],
+    });
+    Ok(DocumentBuilder::new(root)
+        .metadata(Metadata {
+            title: Some("VSD conformance: engine 1.4 shaped scripts".into()),
             ..Default::default()
         })
         .build()?)

@@ -56,6 +56,11 @@ pub enum EngineVersion {
     /// English body text (pinned en-US patterns) and widow/orphan
     /// control in pagination. Everything else identical to 1.2.
     V1_3,
+    /// LAYOUT-1.4.md — shaped complex scripts: Arabic and Devanagari are
+    /// shaped by the pinned pure-Rust HarfBuzz port and emitted as
+    /// positioned `GlyphRun`s (format 0.4). Everything else identical to
+    /// 1.3; CJK / Thai / other Indic scripts are still refused.
+    V1_4,
 }
 
 impl EngineVersion {
@@ -65,6 +70,7 @@ impl EngineVersion {
             EngineVersion::V1_1 => "1.1.0",
             EngineVersion::V1_2 => "1.2.0",
             EngineVersion::V1_3 => "1.3.0",
+            EngineVersion::V1_4 => "1.4.0",
         }
     }
 
@@ -74,6 +80,7 @@ impl EngineVersion {
             "1.1.0" => Some(EngineVersion::V1_1),
             "1.2.0" => Some(EngineVersion::V1_2),
             "1.3.0" => Some(EngineVersion::V1_3),
+            "1.4.0" => Some(EngineVersion::V1_4),
             _ => None,
         }
     }
@@ -84,27 +91,43 @@ impl EngineVersion {
             EngineVersion::V1_1 => crate::text::StylePolicy::V1_1,
             // 1.3 adds no new style flags; it reuses the 1.2 policy.
             EngineVersion::V1_2 | EngineVersion::V1_3 => crate::text::StylePolicy::V1_2,
+            EngineVersion::V1_4 => crate::text::StylePolicy::V1_4,
         }
     }
 
     fn justify(self) -> bool {
-        matches!(self, EngineVersion::V1_2 | EngineVersion::V1_3)
+        matches!(
+            self,
+            EngineVersion::V1_2 | EngineVersion::V1_3 | EngineVersion::V1_4
+        )
     }
 
     fn bidi(self) -> bool {
-        matches!(self, EngineVersion::V1_2 | EngineVersion::V1_3)
+        matches!(
+            self,
+            EngineVersion::V1_2 | EngineVersion::V1_3 | EngineVersion::V1_4
+        )
     }
 
     fn mono_code(self) -> bool {
-        matches!(self, EngineVersion::V1_2 | EngineVersion::V1_3)
+        matches!(
+            self,
+            EngineVersion::V1_2 | EngineVersion::V1_3 | EngineVersion::V1_4
+        )
     }
 
     fn hyphenate(self) -> bool {
-        self == EngineVersion::V1_3
+        matches!(self, EngineVersion::V1_3 | EngineVersion::V1_4)
     }
 
     fn widow_orphan(self) -> bool {
-        self == EngineVersion::V1_3
+        matches!(self, EngineVersion::V1_3 | EngineVersion::V1_4)
+    }
+
+    /// Shape complex scripts (Arabic, Devanagari) into positioned
+    /// glyphs instead of refusing them (engine 1.4).
+    fn shaped(self) -> bool {
+        self == EngineVersion::V1_4
     }
 }
 
@@ -133,7 +156,11 @@ fn refused_script(c: char) -> Option<&'static str> {
 }
 
 fn is_rtl_char(c: char) -> bool {
-    matches!(c, '\u{0590}'..='\u{05FF}' | '\u{FB1D}'..='\u{FB4F}')
+    matches!(c,
+        '\u{0590}'..='\u{05FF}' | '\u{FB1D}'..='\u{FB4F}'   // Hebrew
+        | '\u{0600}'..='\u{06FF}' | '\u{0750}'..='\u{077F}' // Arabic
+        | '\u{08A0}'..='\u{08FF}' | '\u{FB50}'..='\u{FDFF}'
+        | '\u{FE70}'..='\u{FEFF}')
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -148,7 +175,7 @@ impl Default for LayoutOptions {
         LayoutOptions {
             page_width_um: 210_000,
             page_height_um: 297_000,
-            engine: EngineVersion::V1_3,
+            engine: EngineVersion::V1_4,
         }
     }
 }
@@ -179,6 +206,17 @@ enum Op {
         face: Face,
         color: Color,
         rtl: bool,
+        text: String,
+        path: Vec<u64>,
+        range: (u64, u64),
+    },
+    Glyphs {
+        x: i64,
+        baseline: i64, // relative to atom top
+        size_um: i64,
+        face: Face,
+        color: Color,
+        glyphs: Vec<crate::shape::ShapedGlyph>,
         text: String,
         path: Vec<u64>,
         range: (u64, u64),
@@ -221,6 +259,36 @@ impl Op {
                 size_pt: pt(size_um),
                 color,
                 rtl,
+                text,
+                node_path: path,
+                char_range: range,
+            },
+            Op::Glyphs {
+                x,
+                baseline,
+                size_um,
+                face,
+                color,
+                glyphs,
+                text,
+                path,
+                range,
+            } => DisplayOp::GlyphRun {
+                x: mm(x),
+                y: mm(y_off + baseline),
+                font: face.index(),
+                size_pt: pt(size_um),
+                color,
+                glyphs: glyphs
+                    .into_iter()
+                    .map(|g| vsd_core::layout::Glyph {
+                        gid: g.gid,
+                        x_advance: mm(g.x_advance_um),
+                        x_offset: mm(g.x_offset_um),
+                        y_offset: mm(g.y_offset_um),
+                        cluster: g.cluster,
+                    })
+                    .collect(),
                 text,
                 node_path: path,
                 char_range: range,
@@ -672,6 +740,12 @@ impl Engine<'_> {
             return Ok(());
         }
         for c in text.chars() {
+            // Engine 1.4 shapes the scripts it has a pinned font + shaper
+            // for (Arabic, Devanagari); everything else it cannot set
+            // faithfully is still refused, never mis-rendered.
+            if self.opts.engine.shaped() && Face::shaped_for(c).is_some() {
+                continue;
+            }
             if let Some(what) = refused_script(c) {
                 return Err(LayoutError::Unsupported(format!(
                     "engine {} cannot faithfully lay out {what}; \
@@ -877,23 +951,12 @@ impl Engine<'_> {
         for (s, e, is_link, face, underline) in
             segment_line_with(line.start, line.end, lt, &boundaries)
         {
-            let text = &lt.text[s..e];
-            if text.is_empty() {
+            if s >= e {
                 continue;
             }
             let x = x_left + lt.width_um(line.start, s, size_um) + bonus_before(s);
             let color = if is_link { LINK_BLUE } else { BLACK };
-            ops.push(Op::Text {
-                x,
-                baseline: ascent,
-                size_um,
-                face,
-                color,
-                rtl: false,
-                text: text.to_owned(),
-                path: path.to_vec(),
-                range: (s as u64, e as u64),
-            });
+            push_segment(ops, lt, s, e, color, face, false, x, ascent, size_um, path);
             if underline {
                 // The rect runs to the segment's visual end, so a
                 // justified gap inside an underlined range stays solid.
@@ -970,19 +1033,10 @@ impl Engine<'_> {
                 if s >= e {
                     continue;
                 }
-                let w = lt.width_um(s, e, size_um);
                 let color = if is_link { LINK_BLUE } else { BLACK };
-                ops.push(Op::Text {
-                    x: cursor,
-                    baseline: ascent,
-                    size_um,
-                    face,
-                    color,
-                    rtl: run_rtl,
-                    text: lt.text[s..e].to_owned(),
-                    path: path.to_vec(),
-                    range: (s as u64, e as u64),
-                });
+                let w = push_segment(
+                    ops, lt, s, e, color, face, run_rtl, cursor, ascent, size_um, path,
+                );
                 if underline {
                     ops.push(Op::Rect {
                         x: cursor,
@@ -1271,6 +1325,27 @@ fn offset_op(op: Op, dy: i64) -> Op {
             path,
             range,
         },
+        Op::Glyphs {
+            x,
+            baseline,
+            size_um,
+            face,
+            color,
+            glyphs,
+            text,
+            path,
+            range,
+        } => Op::Glyphs {
+            x,
+            baseline: baseline + dy,
+            size_um,
+            face,
+            color,
+            glyphs,
+            text,
+            path,
+            range,
+        },
         Op::Rect { x, y, w, h, color } => Op::Rect {
             x,
             y: y + dy,
@@ -1285,6 +1360,55 @@ fn offset_op(op: Op, dy: i64) -> Op {
             h,
             res,
         },
+    }
+}
+
+/// Emit one homogeneous segment `[s, e)` at absolute x `x`, as either a
+/// simple text op or — for a shaped-script face (engine 1.4) — a
+/// positioned `Op::Glyphs` run produced by the pinned shaper. Returns
+/// the segment's advance width in µm (shaped width for glyph runs).
+#[allow(clippy::too_many_arguments)]
+fn push_segment(
+    ops: &mut Vec<Op>,
+    lt: &LayoutText,
+    s: usize,
+    e: usize,
+    color: Color,
+    face: Face,
+    rtl: bool,
+    x: i64,
+    ascent: i64,
+    size_um: i64,
+    path: &[u64],
+) -> i64 {
+    if face.is_shaped() {
+        let shaped = crate::shape::shape_run(face, &lt.text[s..e], size_um);
+        let w = shaped.width_um;
+        ops.push(Op::Glyphs {
+            x,
+            baseline: ascent,
+            size_um,
+            face,
+            color,
+            glyphs: shaped.glyphs,
+            text: lt.text[s..e].to_owned(),
+            path: path.to_vec(),
+            range: (s as u64, e as u64),
+        });
+        w
+    } else {
+        ops.push(Op::Text {
+            x,
+            baseline: ascent,
+            size_um,
+            face,
+            color,
+            rtl,
+            text: lt.text[s..e].to_owned(),
+            path: path.to_vec(),
+            range: (s as u64, e as u64),
+        });
+        lt.width_um(s, e, size_um)
     }
 }
 
