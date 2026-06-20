@@ -202,12 +202,16 @@ adds monospace, underline, justification, and Hebrew bidi; refuses
 scripts it cannot set faithfully), `vsd-layout/1.3.0`
 ([docs/LAYOUT-1.3.md](../docs/LAYOUT-1.3.md), adds Knuth–Liang
 hyphenation of English body text and widow/orphan control — no
-display-list format change), and `vsd-layout/1.4.0`
+display-list format change), `vsd-layout/1.4.0`
 ([docs/LAYOUT-1.4.md](../docs/LAYOUT-1.4.md), adds Arabic + Devanagari
-shaping via a pinned pure-Rust HarfBuzz port, emitting the `glyphs` op;
-still refuses CJK / Thai / other complex scripts). Each engine version
-is frozen: the conformance corpus pins one golden vector per version and
-a conforming reader MUST reproduce all of them.
+shaping via a pinned pure-Rust HarfBuzz port, emitting the `glyphs` op),
+and `vsd-layout/1.5.0` ([docs/LAYOUT-1.5.md](../docs/LAYOUT-1.5.md),
+adds the remaining major Brahmic scripts — Bengali, Gurmukhi, Gujarati,
+Oriya, Tamil, Telugu, Kannada, Malayalam, Sinhala — and UAX #9 bidi
+mirroring of `Bidi_Mirrored` characters in RTL runs; reuses the `glyphs`
+op, no display-list format change; still refuses CJK / Thai / Lao). Each
+engine version is frozen: the conformance corpus pins one golden vector
+per version and a conforming reader MUST reproduce all of them.
 
 ## 8. (reserved)
 

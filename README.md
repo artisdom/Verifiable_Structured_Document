@@ -43,7 +43,7 @@ four properties that matter and removes the failure modes by construction:
 | [`vsd-core`](crates/vsd-core) | Deterministic CBOR (RFC 8949 §4.2, strict both ways) · content-addressed object store · content tree · manifest & profiles · validation · destructive redaction · forms + fill/flatten · object-set diff · render-layer types. `no_std + alloc` capable. |
 | [`vsd-container`](crates/vsd-container) | The `.vsd` chunk container: 32-byte header, BLAKE3-checksummed chunks, object index, signature blocks, trailer; zstd optional; lazy `StreamReader` for ranged access |
 | [`vsd-sign`](crates/vsd-sign) | Ed25519 signatures over document/subtree Merkle roots, with domain separation (wire format reserves `ecdsa-p256`, `ml-dsa-65`) |
-| [`vsd-layout`](crates/vsd-layout) | The reference layout engine (versions **1.0–1.4**, each an immutable contract): a deterministic projection from content tree to display lists — integer-µm arithmetic, eight pinned Noto faces, pinned hyphenation patterns + pinned shaper (rustybuzz), normative contracts in [docs/LAYOUT-1.0.md](docs/LAYOUT-1.0.md)…[1.4.md](docs/LAYOUT-1.4.md) |
+| [`vsd-layout`](crates/vsd-layout) | The reference layout engine (versions **1.0–1.5**, each an immutable contract): a deterministic projection from content tree to display lists — integer-µm arithmetic, seventeen pinned Noto faces, pinned hyphenation patterns + pinned shaper (rustybuzz) + pinned Unicode mirroring table, normative contracts in [docs/LAYOUT-1.0.md](docs/LAYOUT-1.0.md)…[1.5.md](docs/LAYOUT-1.5.md) |
 | [`vsd-render`](crates/vsd-render) | Rasterizer: display-list pages → PNG via tiny-skia, drawing with the same pinned font the engine measured with |
 | [`vsd-pdf`](crates/vsd-pdf) | PDF interop: deterministic **tagged** PDF export with the canonical `.vsd` embedded (hybrid PDF — round trips losslessly, verifiable by document id); import with hybrid recovery + pluggable structure recovery for foreign PDFs |
 | [`vsd-tlog`](crates/vsd-tlog) | Transparency log: RFC 6962-style Merkle tree over document ids — inclusion + consistency proofs, signed tree heads ("this contract existed, in exactly this form, at this time") |
@@ -369,12 +369,27 @@ CLI.
   and disclosure still operate on source text. Deterministic (pinned
   shaper, integer font units); the 1.0–1.3 golden hashes are unchanged.
 
+**Implemented (v0.15 — engine 1.5 Brahmic scripts + bidi mirroring):**
+
+- **The remaining major Brahmic scripts** (contract in
+  [docs/LAYOUT-1.5.md](docs/LAYOUT-1.5.md)): Bengali, Gurmukhi, Gujarati,
+  Oriya, Tamil, Telugu, Kannada, Malayalam, and Sinhala, shaped by the
+  same pinned `rustybuzz` and emitted as format-0.4 `glyphs` ops.
+- **UAX #9 bidi mirroring**: a `Bidi_Mirrored` character in a
+  right-to-left run is drawn with its mirror glyph (an opening `(` in a
+  Hebrew clause becomes `)`) while the **logical** text keeps the `(`, so
+  search and extraction are untouched. Built on a pinned Unicode 17.0.0
+  mirroring table; reuses the `glyphs` op (no format change), so every
+  prior `.vsd` vector is byte-identical and the 1.0–1.4 hashes are
+  unchanged. Per-version gating keeps engine 1.4 refusing the new scripts.
+
 **Not yet implemented (the honest list):**
 
-- Layout engine widening (engine 1.5+): CJK + vertical text (needs CJK
+- Layout engine widening (engine 1.6+): CJK + vertical text (needs CJK
   fonts and breaking rules), Thai/Lao dictionary line breaking, other
-  Indic/complex scripts, multi-column, MathML layout. The engine refuses
-  what it cannot lay out rather than mis-rendering it.
+  complex scripts beyond the major Brahmic set, multi-column, MathML
+  layout. The engine refuses what it cannot lay out rather than
+  mis-rendering it.
 - Python/TypeScript authoring bindings; Pandoc/Typst backends;
   viewer-integrated form filling; a browser text-selection layer.
 - PDF/A-2b export mode; foreign tagged-PDF structure-tree import; richer

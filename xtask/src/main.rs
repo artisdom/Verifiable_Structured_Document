@@ -192,6 +192,25 @@ fn gen_vectors() -> Result<()> {
         "note": "engine 1.4 complex-script shaping (LAYOUT-1.4.md): Arabic + Devanagari shaped by the pinned rustybuzz into format-0.4 'glyphs' display ops with logical text preserved for extraction",
     }));
 
+    // Engine 1.5: the remaining major Brahmic scripts + bidi mirroring.
+    // An RTL document so the parentheses around Hebrew clearly resolve to
+    // an RTL level and mirror; the Indic words are embedded LTR runs.
+    let mirrored = mirrored_indic_doc()?;
+    let opts_15 = vsd_layout::LayoutOptions::default().with_engine(vsd_layout::EngineVersion::V1_5);
+    let laid_15 = vsd_layout::add_render_cache(&mirrored, &opts_15)?;
+    let laid_15_bytes = write_document(&laid_15, &[], &WriteOptions { compress: false })?;
+    write(&valid.join("laid-out-1.5.vsd"), &laid_15_bytes)?;
+    let cache_15 = laid_15.render_cache()?.expect("cache present");
+    valid_entries.push(json!({
+        "file": "valid/laid-out-1.5.vsd",
+        "doc_id": laid_15.document_id()?.to_hex(),
+        "profile": "core",
+        "layout_engine": "vsd-layout/1.5.0",
+        "layout_hash": hex::encode(cache_15.layout_hash),
+        "layout_pages": cache_15.pages.len(),
+        "note": "engine 1.5 (LAYOUT-1.5.md): the remaining major Brahmic scripts (Bengali/Tamil/Telugu/Kannada/Malayalam/Gujarati/Gurmukhi/Oriya/Sinhala) shaped by the pinned rustybuzz, and UAX #9 bidi mirroring of Bidi_Mirrored characters in RTL runs — both via the format-0.4 'glyphs' op, no format change",
+    }));
+
     let (redacted, predecessor_id, proof) = redacted_doc()?;
     let red_bytes = write_document(&redacted, &[], &WriteOptions { compress: false })?;
     write(&valid.join("redacted.vsd"), &red_bytes)?;
@@ -602,6 +621,41 @@ fn shaped_doc() -> Result<Document> {
     Ok(DocumentBuilder::new(root)
         .metadata(Metadata {
             title: Some("VSD conformance: engine 1.4 shaped scripts".into()),
+            ..Default::default()
+        })
+        .build()?)
+}
+
+fn mirrored_indic_doc() -> Result<Document> {
+    let root = Node::Doc(Doc {
+        lang: "he".into(),
+        dir: Direction::Rtl,
+        children: vec![
+            Node::Heading(Heading {
+                level: 1,
+                children: vec![Inline::Text("Engine 1.5".into())],
+            }),
+            // Bidi mirroring: in this RTL line the parentheses around the
+            // Hebrew phrase resolve to an RTL level and are drawn mirrored
+            // (the logical text still reads "(עולם)").
+            Node::Para(Para {
+                children: vec![Inline::Text("שלום (עולם) ושלום".into())],
+            }),
+            // The remaining Brahmic scripts, shaped by the pinned shaper
+            // (embedded LTR runs inside the RTL document).
+            Node::Para(Para {
+                children: vec![Inline::Text(
+                    "Tamil தமிழ், Bengali বাংলা, Telugu తెలుగు, Kannada ಕನ್ನಡ, \
+                     Malayalam മലയാളം, Gujarati ગુજરાતી, Gurmukhi ਪੰਜਾਬੀ, \
+                     Oriya ଓଡ଼ିଆ, Sinhala සිංහල."
+                        .into(),
+                )],
+            }),
+        ],
+    });
+    Ok(DocumentBuilder::new(root)
+        .metadata(Metadata {
+            title: Some("VSD conformance: engine 1.5 Brahmic scripts + bidi mirroring".into()),
             ..Default::default()
         })
         .build()?)

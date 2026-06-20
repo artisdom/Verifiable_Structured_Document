@@ -21,12 +21,24 @@ static FONT_MONO: &[u8] = include_bytes!("../assets/NotoSansMono-Regular.ttf");
 static FONT_HEBREW: &[u8] = include_bytes!("../assets/NotoSansHebrew-Regular.ttf");
 static FONT_ARABIC: &[u8] = include_bytes!("../assets/NotoSansArabic-Regular.ttf");
 static FONT_DEVANAGARI: &[u8] = include_bytes!("../assets/NotoSansDevanagari-Regular.ttf");
+// Engine 1.5 — the remaining major Brahmic scripts (LAYOUT-1.5.md §2),
+// all shaped by the same pinned `rustybuzz` as Devanagari.
+static FONT_BENGALI: &[u8] = include_bytes!("../assets/NotoSansBengali-Regular.ttf");
+static FONT_GURMUKHI: &[u8] = include_bytes!("../assets/NotoSansGurmukhi-Regular.ttf");
+static FONT_GUJARATI: &[u8] = include_bytes!("../assets/NotoSansGujarati-Regular.ttf");
+static FONT_ORIYA: &[u8] = include_bytes!("../assets/NotoSansOriya-Regular.ttf");
+static FONT_TAMIL: &[u8] = include_bytes!("../assets/NotoSansTamil-Regular.ttf");
+static FONT_TELUGU: &[u8] = include_bytes!("../assets/NotoSansTelugu-Regular.ttf");
+static FONT_KANNADA: &[u8] = include_bytes!("../assets/NotoSansKannada-Regular.ttf");
+static FONT_MALAYALAM: &[u8] = include_bytes!("../assets/NotoSansMalayalam-Regular.ttf");
+static FONT_SINHALA: &[u8] = include_bytes!("../assets/NotoSansSinhala-Regular.ttf");
 
 /// A face of the pinned family. Display lists carry the index in
 /// `TextRun::font` / `GlyphRun::font`. Engine 1.0 only ever emits
 /// `Regular`; 1.1 adds indices 1–3 (LAYOUT-1.1.md); 1.2 adds Mono and
 /// Hebrew (LAYOUT-1.2.md); 1.4 adds the shaped scripts Arabic and
-/// Devanagari (LAYOUT-1.4.md), emitted only via `GlyphRun`.
+/// Devanagari (LAYOUT-1.4.md), emitted only via `GlyphRun`; 1.5 adds the
+/// remaining major Brahmic scripts (LAYOUT-1.5.md), also `GlyphRun`-only.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Face {
     Regular = 0,
@@ -37,10 +49,19 @@ pub enum Face {
     Hebrew = 5,
     Arabic = 6,
     Devanagari = 7,
+    Bengali = 8,
+    Gurmukhi = 9,
+    Gujarati = 10,
+    Oriya = 11,
+    Tamil = 12,
+    Telugu = 13,
+    Kannada = 14,
+    Malayalam = 15,
+    Sinhala = 16,
 }
 
 impl Face {
-    pub const ALL: [Face; 8] = [
+    pub const ALL: [Face; 17] = [
         Face::Regular,
         Face::Bold,
         Face::Italic,
@@ -49,6 +70,15 @@ impl Face {
         Face::Hebrew,
         Face::Arabic,
         Face::Devanagari,
+        Face::Bengali,
+        Face::Gurmukhi,
+        Face::Gujarati,
+        Face::Oriya,
+        Face::Tamil,
+        Face::Telugu,
+        Face::Kannada,
+        Face::Malayalam,
+        Face::Sinhala,
     ];
 
     pub fn index(self) -> u64 {
@@ -66,13 +96,26 @@ impl Face {
             5 => Face::Hebrew,
             6 => Face::Arabic,
             7 => Face::Devanagari,
+            8 => Face::Bengali,
+            9 => Face::Gurmukhi,
+            10 => Face::Gujarati,
+            11 => Face::Oriya,
+            12 => Face::Tamil,
+            13 => Face::Telugu,
+            14 => Face::Kannada,
+            15 => Face::Malayalam,
+            16 => Face::Sinhala,
             _ => Face::Regular,
         }
     }
 
-    /// The shaped-script face a codepoint requires (engine 1.4), or
-    /// `None` for scripts handled by the simple per-glyph path. Used to
-    /// route runs to the shaper and to pick the embedded font.
+    /// The shaped-script face a codepoint requires, or `None` for
+    /// scripts handled by the simple per-glyph path. Used to route runs
+    /// to the shaper and to pick the embedded font. Engine 1.4 shapes
+    /// only Arabic + Devanagari; engine 1.5 adds the remaining Brahmic
+    /// scripts — *which* of these an engine version actually shapes (vs.
+    /// refuses) is gated per version by `EngineVersion::shaped_face`, so
+    /// this map can grow without changing a frozen engine's behavior.
     pub fn shaped_for(c: char) -> Option<Face> {
         match c {
             // Arabic, Arabic Supplement, Extended-A, presentation forms.
@@ -83,13 +126,36 @@ impl Face {
             | '\u{FE70}'..='\u{FEFF}' => Some(Face::Arabic),
             // Devanagari (+ extended).
             '\u{0900}'..='\u{097F}' | '\u{A8E0}'..='\u{A8FF}' => Some(Face::Devanagari),
+            // The other major Brahmic blocks (engine 1.5).
+            '\u{0980}'..='\u{09FF}' => Some(Face::Bengali),
+            '\u{0A00}'..='\u{0A7F}' => Some(Face::Gurmukhi),
+            '\u{0A80}'..='\u{0AFF}' => Some(Face::Gujarati),
+            '\u{0B00}'..='\u{0B7F}' => Some(Face::Oriya),
+            '\u{0B80}'..='\u{0BFF}' => Some(Face::Tamil),
+            '\u{0C00}'..='\u{0C7F}' => Some(Face::Telugu),
+            '\u{0C80}'..='\u{0CFF}' => Some(Face::Kannada),
+            '\u{0D00}'..='\u{0D7F}' => Some(Face::Malayalam),
+            '\u{0D80}'..='\u{0DFF}' => Some(Face::Sinhala),
             _ => None,
         }
     }
 
-    /// Whether this face is shaped via the pinned shaper (engine 1.4).
+    /// Whether this face is shaped via the pinned shaper (engine 1.4+).
     pub fn is_shaped(self) -> bool {
-        matches!(self, Face::Arabic | Face::Devanagari)
+        matches!(
+            self,
+            Face::Arabic
+                | Face::Devanagari
+                | Face::Bengali
+                | Face::Gurmukhi
+                | Face::Gujarati
+                | Face::Oriya
+                | Face::Tamil
+                | Face::Telugu
+                | Face::Kannada
+                | Face::Malayalam
+                | Face::Sinhala
+        )
     }
 
     pub fn pick(bold: bool, italic: bool) -> Face {
@@ -137,6 +203,15 @@ impl Face {
             Face::Hebrew => FONT_HEBREW,
             Face::Arabic => FONT_ARABIC,
             Face::Devanagari => FONT_DEVANAGARI,
+            Face::Bengali => FONT_BENGALI,
+            Face::Gurmukhi => FONT_GURMUKHI,
+            Face::Gujarati => FONT_GUJARATI,
+            Face::Oriya => FONT_ORIYA,
+            Face::Tamil => FONT_TAMIL,
+            Face::Telugu => FONT_TELUGU,
+            Face::Kannada => FONT_KANNADA,
+            Face::Malayalam => FONT_MALAYALAM,
+            Face::Sinhala => FONT_SINHALA,
         }
     }
 
@@ -150,6 +225,15 @@ impl Face {
             Face::Hebrew => "NotoSansHebrew-Regular",
             Face::Arabic => "NotoSansArabic-Regular",
             Face::Devanagari => "NotoSansDevanagari-Regular",
+            Face::Bengali => "NotoSansBengali-Regular",
+            Face::Gurmukhi => "NotoSansGurmukhi-Regular",
+            Face::Gujarati => "NotoSansGujarati-Regular",
+            Face::Oriya => "NotoSansOriya-Regular",
+            Face::Tamil => "NotoSansTamil-Regular",
+            Face::Telugu => "NotoSansTelugu-Regular",
+            Face::Kannada => "NotoSansKannada-Regular",
+            Face::Malayalam => "NotoSansMalayalam-Regular",
+            Face::Sinhala => "NotoSansSinhala-Regular",
         }
     }
 }
@@ -171,7 +255,7 @@ pub struct FontMetrics {
     pub line_gap_units: i64,
 }
 
-static METRICS: OnceLock<[FontMetrics; 8]> = OnceLock::new();
+static METRICS: OnceLock<[FontMetrics; 17]> = OnceLock::new();
 
 impl FontMetrics {
     fn parse_face(bytes: &'static [u8]) -> FontMetrics {
@@ -185,19 +269,8 @@ impl FontMetrics {
         }
     }
 
-    fn all() -> &'static [FontMetrics; 8] {
-        METRICS.get_or_init(|| {
-            [
-                Self::parse_face(Face::Regular.bytes()),
-                Self::parse_face(Face::Bold.bytes()),
-                Self::parse_face(Face::Italic.bytes()),
-                Self::parse_face(Face::BoldItalic.bytes()),
-                Self::parse_face(Face::Mono.bytes()),
-                Self::parse_face(Face::Hebrew.bytes()),
-                Self::parse_face(Face::Arabic.bytes()),
-                Self::parse_face(Face::Devanagari.bytes()),
-            ]
-        })
+    fn all() -> &'static [FontMetrics; 17] {
+        METRICS.get_or_init(|| Face::ALL.map(|f| Self::parse_face(f.bytes())))
     }
 
     /// The regular face — baseline metrics and engine-1.0 behavior.

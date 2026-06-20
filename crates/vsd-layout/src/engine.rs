@@ -61,6 +61,13 @@ pub enum EngineVersion {
     /// positioned `GlyphRun`s (format 0.4). Everything else identical to
     /// 1.3; CJK / Thai / other Indic scripts are still refused.
     V1_4,
+    /// LAYOUT-1.5.md — the remaining major Brahmic scripts (Bengali,
+    /// Gurmukhi, Gujarati, Oriya, Tamil, Telugu, Kannada, Malayalam,
+    /// Sinhala) are shaped by the same pinned shaper, and `Bidi_Mirrored`
+    /// characters in right-to-left runs are mirrored (UAX #9 HL6). No
+    /// format change — both reuse the format-0.4 `GlyphRun`. Everything
+    /// else identical to 1.4; CJK and Thai/Lao are still refused.
+    V1_5,
 }
 
 impl EngineVersion {
@@ -71,6 +78,7 @@ impl EngineVersion {
             EngineVersion::V1_2 => "1.2.0",
             EngineVersion::V1_3 => "1.3.0",
             EngineVersion::V1_4 => "1.4.0",
+            EngineVersion::V1_5 => "1.5.0",
         }
     }
 
@@ -81,6 +89,7 @@ impl EngineVersion {
             "1.2.0" => Some(EngineVersion::V1_2),
             "1.3.0" => Some(EngineVersion::V1_3),
             "1.4.0" => Some(EngineVersion::V1_4),
+            "1.5.0" => Some(EngineVersion::V1_5),
             _ => None,
         }
     }
@@ -91,43 +100,58 @@ impl EngineVersion {
             EngineVersion::V1_1 => crate::text::StylePolicy::V1_1,
             // 1.3 adds no new style flags; it reuses the 1.2 policy.
             EngineVersion::V1_2 | EngineVersion::V1_3 => crate::text::StylePolicy::V1_2,
-            EngineVersion::V1_4 => crate::text::StylePolicy::V1_4,
+            // 1.5 adds no new style flags either (mirroring and the new
+            // shaped scripts are routed by `script_fallback`).
+            EngineVersion::V1_4 | EngineVersion::V1_5 => crate::text::StylePolicy::V1_4,
         }
     }
 
     fn justify(self) -> bool {
-        matches!(
-            self,
-            EngineVersion::V1_2 | EngineVersion::V1_3 | EngineVersion::V1_4
-        )
+        !matches!(self, EngineVersion::V1_0 | EngineVersion::V1_1)
     }
 
     fn bidi(self) -> bool {
-        matches!(
-            self,
-            EngineVersion::V1_2 | EngineVersion::V1_3 | EngineVersion::V1_4
-        )
+        !matches!(self, EngineVersion::V1_0 | EngineVersion::V1_1)
     }
 
     fn mono_code(self) -> bool {
-        matches!(
-            self,
-            EngineVersion::V1_2 | EngineVersion::V1_3 | EngineVersion::V1_4
-        )
+        !matches!(self, EngineVersion::V1_0 | EngineVersion::V1_1)
     }
 
     fn hyphenate(self) -> bool {
-        matches!(self, EngineVersion::V1_3 | EngineVersion::V1_4)
+        matches!(
+            self,
+            EngineVersion::V1_3 | EngineVersion::V1_4 | EngineVersion::V1_5
+        )
     }
 
     fn widow_orphan(self) -> bool {
-        matches!(self, EngineVersion::V1_3 | EngineVersion::V1_4)
+        matches!(
+            self,
+            EngineVersion::V1_3 | EngineVersion::V1_4 | EngineVersion::V1_5
+        )
     }
 
-    /// Shape complex scripts (Arabic, Devanagari) into positioned
-    /// glyphs instead of refusing them (engine 1.4).
-    fn shaped(self) -> bool {
-        self == EngineVersion::V1_4
+    /// The shaped face this engine version applies to `c`, or `None` if
+    /// it does not shape that script (and so must refuse it). This is the
+    /// freeze-critical gate: `Face::shaped_for` is a forward-growing map,
+    /// but each engine version shapes only the scripts it shipped with —
+    /// 1.4 shapes Arabic + Devanagari only; 1.5 adds the other Brahmic
+    /// scripts. Earlier versions shape nothing.
+    fn shaped_face(self, c: char) -> Option<Face> {
+        let f = Face::shaped_for(c)?;
+        let shaped = match self {
+            EngineVersion::V1_4 => matches!(f, Face::Arabic | Face::Devanagari),
+            EngineVersion::V1_5 => true,
+            _ => false,
+        };
+        shaped.then_some(f)
+    }
+
+    /// Mirror `Bidi_Mirrored` characters in right-to-left runs (engine
+    /// 1.5, UAX #9 HL6).
+    fn mirror(self) -> bool {
+        matches!(self, EngineVersion::V1_5)
     }
 }
 
@@ -740,10 +764,11 @@ impl Engine<'_> {
             return Ok(());
         }
         for c in text.chars() {
-            // Engine 1.4 shapes the scripts it has a pinned font + shaper
-            // for (Arabic, Devanagari); everything else it cannot set
-            // faithfully is still refused, never mis-rendered.
-            if self.opts.engine.shaped() && Face::shaped_for(c).is_some() {
+            // Each engine shapes the scripts it has a pinned font +
+            // shaper for (1.4: Arabic, Devanagari; 1.5: + the other major
+            // Brahmic scripts); everything else it cannot set faithfully
+            // is still refused, never mis-rendered.
+            if self.opts.engine.shaped_face(c).is_some() {
                 continue;
             }
             if let Some(what) = refused_script(c) {
@@ -956,7 +981,10 @@ impl Engine<'_> {
             }
             let x = x_left + lt.width_um(line.start, s, size_um) + bonus_before(s);
             let color = if is_link { LINK_BLUE } else { BLACK };
-            push_segment(ops, lt, s, e, color, face, false, x, ascent, size_um, path);
+            // LTR runs never mirror (mirroring applies only to RTL runs).
+            push_segment(
+                ops, lt, s, e, color, face, false, false, x, ascent, size_um, path,
+            );
             if underline {
                 // The rect runs to the segment's visual end, so a
                 // justified gap inside an underlined range stays solid.
@@ -1022,6 +1050,8 @@ impl Engine<'_> {
         } else {
             x_left
         };
+        // Mirror Bidi_Mirrored characters inside RTL runs (engine 1.5).
+        let mirror = self.opts.engine.mirror();
         for run in runs {
             let run_rtl = levels[run.start].is_rtl();
             let mut segs = segment_line(run.start, run.end, lt);
@@ -1035,7 +1065,18 @@ impl Engine<'_> {
                 }
                 let color = if is_link { LINK_BLUE } else { BLACK };
                 let w = push_segment(
-                    ops, lt, s, e, color, face, run_rtl, cursor, ascent, size_um, path,
+                    ops,
+                    lt,
+                    s,
+                    e,
+                    color,
+                    face,
+                    run_rtl,
+                    run_rtl && mirror,
+                    cursor,
+                    ascent,
+                    size_um,
+                    path,
                 );
                 if underline {
                     ops.push(Op::Rect {
@@ -1363,10 +1404,14 @@ fn offset_op(op: Op, dy: i64) -> Op {
     }
 }
 
-/// Emit one homogeneous segment `[s, e)` at absolute x `x`, as either a
-/// simple text op or — for a shaped-script face (engine 1.4) — a
-/// positioned `Op::Glyphs` run produced by the pinned shaper. Returns
-/// the segment's advance width in µm (shaped width for glyph runs).
+/// Emit one homogeneous segment `[s, e)` at absolute x `x`. A shaped
+/// face (engine 1.4+) becomes a positioned `Op::Glyphs` run from the
+/// pinned shaper. Otherwise, in a right-to-left run that contains a
+/// `Bidi_Mirrored` character (`mirror`, engine 1.5), the segment becomes
+/// an `Op::Glyphs` run whose glyphs are the mirrored, visually ordered
+/// per-character glyphs (the logical text is still carried). Everything
+/// else is a plain `Op::Text` run. Returns the segment's advance width
+/// in µm (shaped/positioned width for glyph runs).
 #[allow(clippy::too_many_arguments)]
 fn push_segment(
     ops: &mut Vec<Op>,
@@ -1376,6 +1421,7 @@ fn push_segment(
     color: Color,
     face: Face,
     rtl: bool,
+    mirror: bool,
     x: i64,
     ascent: i64,
     size_um: i64,
@@ -1383,6 +1429,21 @@ fn push_segment(
 ) -> i64 {
     if face.is_shaped() {
         let shaped = crate::shape::shape_run(face, &lt.text[s..e], size_um);
+        let w = shaped.width_um;
+        ops.push(Op::Glyphs {
+            x,
+            baseline: ascent,
+            size_um,
+            face,
+            color,
+            glyphs: shaped.glyphs,
+            text: lt.text[s..e].to_owned(),
+            path: path.to_vec(),
+            range: (s as u64, e as u64),
+        });
+        w
+    } else if mirror && crate::shape::has_mirrored(&lt.text[s..e]) {
+        let shaped = crate::shape::position_mirrored_rtl(face, &lt.text[s..e], size_um);
         let w = shaped.width_um;
         ops.push(Op::Glyphs {
             x,

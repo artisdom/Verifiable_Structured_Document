@@ -111,6 +111,15 @@
       "profile": "core"
     },
     {
+      "doc_id": "7325338dfb29a3d2a2d3c033ed22196524580a234e30ad8ede458ef2a109c9d8",
+      "file": "valid/laid-out-1.5.vsd",
+      "layout_engine": "vsd-layout/1.5.0",
+      "layout_hash": "bc8b1e5c4d9719353c3aeecd86765ce09cc57d4fbcd9e1f94eeed88df23ffd99",
+      "layout_pages": 1,
+      "note": "engine 1.5 (LAYOUT-1.5.md): the remaining major Brahmic scripts (Bengali/Tamil/Telugu/Kannada/Malayalam/Gujarati/Gurmukhi/Oriya/Sinhala) shaped by the pinned rustybuzz, and UAX #9 bidi mirroring of Bidi_Mirrored characters in RTL runs — both via the format-0.4 'glyphs' op, no format change",
+      "profile": "core"
+    },
+    {
       "doc_id": "8079236045ad4f0e947e6f0cb8a2c8b255087d548a87c9613e80a27f7ec86ae9",
       "file": "valid/redacted.vsd",
       "must_not_contain": "TOP-SECRET-ACCOUNT-9912",

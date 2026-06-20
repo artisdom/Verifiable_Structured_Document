@@ -1097,7 +1097,7 @@ fn engine_1_2_justifies_body_paragraphs() {
 fn engine_1_2_rtl_documents_right_align() {
     use vsd_core::layout::DisplayOp;
     use vsd_layout::font::{Face, FontMetrics};
-    use vsd_layout::LayoutOptions;
+    use vsd_layout::{EngineVersion, LayoutOptions};
 
     let root = Node::Doc(Doc {
         lang: "he".into(),
@@ -1107,7 +1107,12 @@ fn engine_1_2_rtl_documents_right_align() {
         })],
     });
     let doc = DocumentBuilder::new(root).build().unwrap();
-    let pages = vsd_layout::layout_document(&doc, &LayoutOptions::default()).unwrap();
+    // Pin 1.2 (plain RTL, no mirroring): the default has moved forward.
+    let pages = vsd_layout::layout_document(
+        &doc,
+        &LayoutOptions::default().with_engine(EngineVersion::V1_2),
+    )
+    .unwrap();
     let mut right_edge = f64::NEG_INFINITY;
     let mut saw_rtl = false;
     for op in pages.iter().flat_map(|p| &p.ops) {
@@ -1473,7 +1478,9 @@ fn engine_1_4_shapes_arabic_and_devanagari() {
     .build()
     .unwrap();
 
-    let opts = LayoutOptions::default();
+    // Pin engine 1.4: the default has since moved forward, but the 1.4
+    // contract (Arabic + Devanagari shaping) is frozen and tested here.
+    let opts = LayoutOptions::default().with_engine(EngineVersion::V1_4);
     assert_eq!(opts.engine.as_str(), "1.4.0");
     let pages = vsd_layout::layout_document(&doc, &opts).unwrap();
     let glyph_runs: Vec<(&u64, &String, usize)> = pages
@@ -1557,7 +1564,7 @@ fn engine_1_4_shapes_arabic_and_devanagari() {
 fn engine_1_4_arabic_rtl_is_visually_ordered() {
     use vsd_core::layout::DisplayOp;
     use vsd_layout::font::{Face, FontMetrics};
-    use vsd_layout::LayoutOptions;
+    use vsd_layout::{EngineVersion, LayoutOptions};
 
     let doc = DocumentBuilder::new(Node::Doc(Doc {
         lang: "ar".into(),
@@ -1568,7 +1575,11 @@ fn engine_1_4_arabic_rtl_is_visually_ordered() {
     }))
     .build()
     .unwrap();
-    let pages = vsd_layout::layout_document(&doc, &LayoutOptions::default()).unwrap();
+    let pages = vsd_layout::layout_document(
+        &doc,
+        &LayoutOptions::default().with_engine(EngineVersion::V1_4),
+    )
+    .unwrap();
     let mut right_edge = f64::NEG_INFINITY;
     let mut saw_visual_reorder = false;
     for op in pages.iter().flat_map(|p| &p.ops) {
@@ -1596,4 +1607,160 @@ fn engine_1_4_arabic_rtl_is_visually_ordered() {
     );
     // Sanity: the Arabic face actually has the metrics we scaled with.
     assert!(FontMetrics::face_metrics(Face::Arabic).upem > 0);
+}
+
+/// Engine 1.5 shapes the remaining major Brahmic scripts via the same
+/// pinned shaper as Devanagari, emitting them as positioned GlyphRuns in
+/// their own face; engine 1.4 still refuses them (frozen contract).
+#[test]
+fn engine_1_5_shapes_remaining_brahmic_scripts() {
+    use vsd_core::layout::DisplayOp;
+    use vsd_layout::{EngineVersion, LayoutOptions, RecomputeOutcome};
+
+    let tamil = "தமிழ்";
+    let bengali = "বাংলা";
+    let telugu = "తెలుగు";
+    let doc = DocumentBuilder::new(Node::Doc(Doc {
+        lang: "en".into(),
+        dir: Direction::Ltr,
+        children: vec![Node::Para(Para {
+            children: vec![Inline::Text(format!(
+                "Tamil {tamil}, Bengali {bengali}, Telugu {telugu}."
+            ))],
+        })],
+    }))
+    .build()
+    .unwrap();
+
+    let opts = LayoutOptions::default().with_engine(EngineVersion::V1_5);
+    assert_eq!(opts.engine.as_str(), "1.5.0");
+    let pages = vsd_layout::layout_document(&doc, &opts).unwrap();
+    let glyph_runs: Vec<(u64, &String)> = pages
+        .iter()
+        .flat_map(|p| &p.ops)
+        .filter_map(|op| match op {
+            DisplayOp::GlyphRun { font, text, .. } => Some((*font, text)),
+            _ => None,
+        })
+        .collect();
+    // Tamil → face 12, Bengali → 8, Telugu → 13; each carries its word.
+    for (face_idx, word) in [(12u64, tamil), (8, bengali), (13, telugu)] {
+        let run = glyph_runs
+            .iter()
+            .find(|(f, t)| *f == face_idx && t.contains(word))
+            .unwrap_or_else(|| panic!("missing glyph run for face {face_idx} / {word}"));
+        assert!(run.1.contains(word), "logical text preserved");
+    }
+    // Every shaped glyph is real, with a valid cluster into its run text.
+    for op in pages.iter().flat_map(|p| &p.ops) {
+        if let DisplayOp::GlyphRun { glyphs, text, .. } = op {
+            assert!(glyphs.iter().all(|g| g.gid != 0), "no .notdef");
+            assert!(glyphs.iter().all(|g| (g.cluster as usize) < text.len()));
+        }
+    }
+    // The cache pins 1.5.0 and recomputes byte-identically.
+    let laid = vsd_layout::add_render_cache(&doc, &opts).unwrap();
+    let cache = laid.render_cache().unwrap().unwrap();
+    assert_eq!(cache.engine_version, "1.5.0");
+    assert!(matches!(
+        vsd_layout::verify_render_cache(&laid).unwrap(),
+        RecomputeOutcome::Match { .. }
+    ));
+    // Raster + tagged-PDF export accept the new faces.
+    let page = vsd_core::layout::Page::from_value(&laid.store.get_value(&cache.pages[0]).unwrap())
+        .unwrap();
+    assert!(!vsd_render::render_page_png(&laid, &page, 96.0)
+        .unwrap()
+        .is_empty());
+    assert!(
+        !vsd_pdf::export_pdf(&laid, None, &vsd_pdf::ExportOptions::default())
+            .unwrap()
+            .is_empty()
+    );
+
+    // Frozen contract: engine 1.4 refuses these scripts (it shaped only
+    // Arabic + Devanagari).
+    assert!(matches!(
+        vsd_layout::layout_document(&doc, &opts.with_engine(EngineVersion::V1_4)),
+        Err(vsd_layout::LayoutError::Unsupported(_))
+    ));
+}
+
+/// Engine 1.5 mirrors `Bidi_Mirrored` characters in RTL runs (UAX #9
+/// HL6): a `(` opening a clause in Hebrew is drawn with the `)` glyph,
+/// while the logical text keeps the `(`. The Hebrew letters themselves
+/// stay on the proven format-0.3 TextRun path; only the mirrored
+/// bracket segment becomes a positioned GlyphRun. Engine 1.2 does not
+/// mirror (frozen): it emits no GlyphRun at all.
+#[test]
+fn engine_1_5_mirrors_brackets_in_rtl() {
+    use vsd_core::layout::DisplayOp;
+    use vsd_layout::font::{Face, FontMetrics};
+    use vsd_layout::{EngineVersion, LayoutOptions};
+
+    let doc = DocumentBuilder::new(Node::Doc(Doc {
+        lang: "he".into(),
+        dir: Direction::Rtl,
+        children: vec![Node::Para(Para {
+            children: vec![Inline::Text("שלום (עולם) ושלום".into())],
+        })],
+    }))
+    .build()
+    .unwrap();
+
+    let opts = LayoutOptions::default().with_engine(EngineVersion::V1_5);
+    let pages = vsd_layout::layout_document(&doc, &opts).unwrap();
+    let reg = FontMetrics::face_metrics(Face::Regular);
+    let open_gid = reg.glyph('(').0;
+    let close_gid = reg.glyph(')').0;
+    assert_ne!(open_gid, close_gid);
+
+    let mut saw_mirrored_open = false;
+    let mut saw_mirrored_close = false;
+    let mut saw_hebrew_textrun = false;
+    for op in pages.iter().flat_map(|p| &p.ops) {
+        match op {
+            // Bracket segments are Regular-face positioned glyph runs.
+            DisplayOp::GlyphRun {
+                font, glyphs, text, ..
+            } if *font == 0 => {
+                for g in glyphs {
+                    let logical = text[g.cluster as usize..].chars().next().unwrap();
+                    if logical == '(' {
+                        // Logical '(' must be drawn with the ')' glyph.
+                        assert_eq!(g.gid, close_gid, "'(' must mirror to ')' glyph");
+                        saw_mirrored_open = true;
+                    }
+                    if logical == ')' {
+                        assert_eq!(g.gid, open_gid, "')' must mirror to '(' glyph");
+                        saw_mirrored_close = true;
+                    }
+                }
+                // The logical text is preserved (un-mirrored).
+                assert!(text.contains('(') || text.contains(')') || text.contains(' '));
+            }
+            // Hebrew stays on the format-0.3 rtl TextRun path (face 5).
+            DisplayOp::TextRun { font, rtl, .. } if *font == 5 && *rtl => {
+                saw_hebrew_textrun = true;
+            }
+            _ => {}
+        }
+    }
+    assert!(saw_mirrored_open, "the opening paren must be mirrored");
+    assert!(saw_mirrored_close, "the closing paren must be mirrored");
+    assert!(
+        saw_hebrew_textrun,
+        "Hebrew letters must remain plain rtl text runs (only brackets convert)"
+    );
+
+    // Frozen contract: engine 1.2 does not mirror — it emits no GlyphRun.
+    let pages_12 =
+        vsd_layout::layout_document(&doc, &opts.with_engine(EngineVersion::V1_2)).unwrap();
+    assert!(
+        pages_12
+            .iter()
+            .flat_map(|p| &p.ops)
+            .all(|op| !matches!(op, DisplayOp::GlyphRun { .. })),
+        "engine 1.2 must not produce glyph runs (no mirroring)"
+    );
 }
