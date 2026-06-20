@@ -281,10 +281,17 @@ forever against their pinned engine.
       logical text keeps the `(`). Both reuse the format-0.4 `glyphs` op —
       **no format change**, so every prior `.vsd` vector is byte-identical
       and only a new 1.5 vector is added. Per-version refusal gating keeps
-      1.4 refusing the new scripts. ☐ Still refused (no font / no
-      algorithm yet): CJK + vertical text, Thai/Lao dictionary breaking,
-      other complex scripts beyond the major Brahmic set (Myanmar, Khmer,
-      Tibetan, Ethiopic, …).
+      1.4 refusing the new scripts. **Engine 1.6 shipped (v0.16,
+      [docs/LAYOUT-1.6.md](docs/LAYOUT-1.6.md))**: **Thai + Lao** shaped
+      by the same pinned `rustybuzz`, with **dictionary-based line
+      breaking** (deterministic forward longest-match over the pinned ICU
+      word lists) since those scripts have no inter-word spaces — break
+      opportunities feed the same greedy breaker as spaces/hyphenation,
+      zero-width and hyphenless. No format change; per-version gating
+      keeps 1.5 refusing Thai/Lao; 1.0–1.5 hashes unchanged. ☐ Still
+      refused (no font / no algorithm yet): CJK + vertical text, other
+      complex scripts beyond the major Brahmic + Thai/Lao set (Myanmar,
+      Khmer, Tibetan, Ethiopic, …).
 - [ ] **2j. Advanced page layout**: floats & multi-column (needs a
       `columns` block attribute — an additive format change) and MathML
       layout (today math renders via its fallback image or as code).
@@ -614,6 +621,7 @@ core spec before a working prototype and an adversarial review.
 | **0.13** ✅ | Engine 1.3 page furniture | Knuth–Liang hyphenation of English body text (pinned en-US patterns) + widow/orphan control; no format change; 1.0/1.1/1.2 golden hashes byte-for-byte unchanged |
 | **0.14** ✅ | Engine 1.4 shaped scripts | Arabic + Devanagari shaping via pinned rustybuzz; new format-0.4 `glyphs` op (positioned glyphs, logical text retained); consumers are dumb glyph-drawers; 1.0–1.3 golden hashes unchanged |
 | **0.15** ✅ | Engine 1.5 Brahmic + mirroring | Bengali/Gurmukhi/Gujarati/Oriya/Tamil/Telugu/Kannada/Malayalam/Sinhala shaping (same pinned rustybuzz) + UAX #9 bidi mirroring (pinned Unicode 17.0.0 table); reuses `glyphs` op (no format change); every prior `.vsd` byte-identical, 1.0–1.4 hashes unchanged |
+| **0.16** ✅ | Engine 1.6 Thai/Lao | Thai + Lao shaping + dictionary-based line breaking (forward longest-match over pinned ICU word lists; spaceless scripts); reuses `glyphs` op (no format change); 1.0–1.5 hashes unchanged |
 | **1.0** | Freeze | Spec 1.0, two implementations, audit complete, ISO/W3C track |
 
 *Versioning policy:* the format major version and the crate versions decouple

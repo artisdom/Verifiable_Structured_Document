@@ -120,6 +120,15 @@
       "profile": "core"
     },
     {
+      "doc_id": "4b6f3457875499538c85c073de496ed28ffe2e27af934c61238c39d9be1e2acc",
+      "file": "valid/laid-out-1.6.vsd",
+      "layout_engine": "vsd-layout/1.6.0",
+      "layout_hash": "b1924580349d70b85a63be082ab060a6d491fe7be74146581f97b6a70cd2a800",
+      "layout_pages": 2,
+      "note": "engine 1.6 (LAYOUT-1.6.md): Thai + Lao shaped by the pinned rustybuzz, with dictionary-based line breaking (forward longest-match over the pinned ICU word lists) since these scripts have no inter-word spaces; reuses the format-0.4 'glyphs' op, no format change",
+      "profile": "core"
+    },
+    {
       "doc_id": "8079236045ad4f0e947e6f0cb8a2c8b255087d548a87c9613e80a27f7ec86ae9",
       "file": "valid/redacted.vsd",
       "must_not_contain": "TOP-SECRET-ACCOUNT-9912",

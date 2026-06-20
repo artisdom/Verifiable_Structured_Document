@@ -211,6 +211,29 @@ fn gen_vectors() -> Result<()> {
         "note": "engine 1.5 (LAYOUT-1.5.md): the remaining major Brahmic scripts (Bengali/Tamil/Telugu/Kannada/Malayalam/Gujarati/Gurmukhi/Oriya/Sinhala) shaped by the pinned rustybuzz, and UAX #9 bidi mirroring of Bidi_Mirrored characters in RTL runs — both via the format-0.4 'glyphs' op, no format change",
     }));
 
+    // Engine 1.6: Thai/Lao shaping + dictionary line breaking. A narrow
+    // page forces the spaceless Thai/Lao paragraphs to wrap, exercising
+    // the pinned-dictionary segmenter.
+    let thai = thai_doc()?;
+    let opts_16 = vsd_layout::LayoutOptions {
+        page_width_um: 70_000,
+        page_height_um: 90_000,
+        engine: vsd_layout::EngineVersion::V1_6,
+    };
+    let laid_16 = vsd_layout::add_render_cache(&thai, &opts_16)?;
+    let laid_16_bytes = write_document(&laid_16, &[], &WriteOptions { compress: false })?;
+    write(&valid.join("laid-out-1.6.vsd"), &laid_16_bytes)?;
+    let cache_16 = laid_16.render_cache()?.expect("cache present");
+    valid_entries.push(json!({
+        "file": "valid/laid-out-1.6.vsd",
+        "doc_id": laid_16.document_id()?.to_hex(),
+        "profile": "core",
+        "layout_engine": "vsd-layout/1.6.0",
+        "layout_hash": hex::encode(cache_16.layout_hash),
+        "layout_pages": cache_16.pages.len(),
+        "note": "engine 1.6 (LAYOUT-1.6.md): Thai + Lao shaped by the pinned rustybuzz, with dictionary-based line breaking (forward longest-match over the pinned ICU word lists) since these scripts have no inter-word spaces; reuses the format-0.4 'glyphs' op, no format change",
+    }));
+
     let (redacted, predecessor_id, proof) = redacted_doc()?;
     let red_bytes = write_document(&redacted, &[], &WriteOptions { compress: false })?;
     write(&valid.join("redacted.vsd"), &red_bytes)?;
@@ -656,6 +679,40 @@ fn mirrored_indic_doc() -> Result<Document> {
     Ok(DocumentBuilder::new(root)
         .metadata(Metadata {
             title: Some("VSD conformance: engine 1.5 Brahmic scripts + bidi mirroring".into()),
+            ..Default::default()
+        })
+        .build()?)
+}
+
+fn thai_doc() -> Result<Document> {
+    let root = Node::Doc(Doc {
+        lang: "th".into(),
+        dir: Direction::Ltr,
+        children: vec![
+            Node::Heading(Heading {
+                level: 1,
+                children: vec![Inline::Text("Engine 1.6".into())],
+            }),
+            // Thai: no inter-word spaces; the dictionary segmenter finds
+            // the line-break opportunities so this wraps on the narrow
+            // page instead of overflowing.
+            Node::Para(Para {
+                children: vec![Inline::Text(
+                    "ภาษาไทยเป็นภาษาที่สวยงามและมีเอกลักษณ์เฉพาะตัวซึ่งเขียนติดกันโดยไม่มีการเว้นวรรคระหว่างคำ"
+                        .into(),
+                )],
+            }),
+            // Lao: likewise segmented by its own pinned dictionary.
+            Node::Para(Para {
+                children: vec![Inline::Text(
+                    "ພາສາລາວເປັນພາສາທີ່ສວຍງາມແລະຂຽນຕິດກັນໂດຍບໍ່ມີການເວັ້ນວັກລະຫວ່າງຄຳ".into(),
+                )],
+            }),
+        ],
+    });
+    Ok(DocumentBuilder::new(root)
+        .metadata(Metadata {
+            title: Some("VSD conformance: engine 1.6 Thai/Lao dictionary line breaking".into()),
             ..Default::default()
         })
         .build()?)

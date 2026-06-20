@@ -68,6 +68,11 @@ pub enum EngineVersion {
     /// format change — both reuse the format-0.4 `GlyphRun`. Everything
     /// else identical to 1.4; CJK and Thai/Lao are still refused.
     V1_5,
+    /// LAYOUT-1.6.md — Thai and Lao: shaped by the same pinned shaper,
+    /// with **dictionary-based line breaking** (these scripts have no
+    /// inter-word spaces) over pinned ICU word lists. No format change.
+    /// Everything else identical to 1.5; CJK is still refused.
+    V1_6,
 }
 
 impl EngineVersion {
@@ -79,6 +84,7 @@ impl EngineVersion {
             EngineVersion::V1_3 => "1.3.0",
             EngineVersion::V1_4 => "1.4.0",
             EngineVersion::V1_5 => "1.5.0",
+            EngineVersion::V1_6 => "1.6.0",
         }
     }
 
@@ -90,6 +96,7 @@ impl EngineVersion {
             "1.3.0" => Some(EngineVersion::V1_3),
             "1.4.0" => Some(EngineVersion::V1_4),
             "1.5.0" => Some(EngineVersion::V1_5),
+            "1.6.0" => Some(EngineVersion::V1_6),
             _ => None,
         }
     }
@@ -100,9 +107,12 @@ impl EngineVersion {
             EngineVersion::V1_1 => crate::text::StylePolicy::V1_1,
             // 1.3 adds no new style flags; it reuses the 1.2 policy.
             EngineVersion::V1_2 | EngineVersion::V1_3 => crate::text::StylePolicy::V1_2,
-            // 1.5 adds no new style flags either (mirroring and the new
-            // shaped scripts are routed by `script_fallback`).
-            EngineVersion::V1_4 | EngineVersion::V1_5 => crate::text::StylePolicy::V1_4,
+            // 1.5/1.6 add no new style flags either (mirroring, the new
+            // shaped scripts, and dictionary breaking are not style-table
+            // behaviors; shaped scripts are routed by `script_fallback`).
+            EngineVersion::V1_4 | EngineVersion::V1_5 | EngineVersion::V1_6 => {
+                crate::text::StylePolicy::V1_4
+            }
         }
     }
 
@@ -121,14 +131,14 @@ impl EngineVersion {
     fn hyphenate(self) -> bool {
         matches!(
             self,
-            EngineVersion::V1_3 | EngineVersion::V1_4 | EngineVersion::V1_5
+            EngineVersion::V1_3 | EngineVersion::V1_4 | EngineVersion::V1_5 | EngineVersion::V1_6
         )
     }
 
     fn widow_orphan(self) -> bool {
         matches!(
             self,
-            EngineVersion::V1_3 | EngineVersion::V1_4 | EngineVersion::V1_5
+            EngineVersion::V1_3 | EngineVersion::V1_4 | EngineVersion::V1_5 | EngineVersion::V1_6
         )
     }
 
@@ -137,21 +147,33 @@ impl EngineVersion {
     /// freeze-critical gate: `Face::shaped_for` is a forward-growing map,
     /// but each engine version shapes only the scripts it shipped with —
     /// 1.4 shapes Arabic + Devanagari only; 1.5 adds the other Brahmic
-    /// scripts. Earlier versions shape nothing.
+    /// scripts; 1.6 adds Thai + Lao. Earlier versions shape nothing.
     fn shaped_face(self, c: char) -> Option<Face> {
         let f = Face::shaped_for(c)?;
         let shaped = match self {
+            EngineVersion::V1_0
+            | EngineVersion::V1_1
+            | EngineVersion::V1_2
+            | EngineVersion::V1_3 => false,
             EngineVersion::V1_4 => matches!(f, Face::Arabic | Face::Devanagari),
-            EngineVersion::V1_5 => true,
-            _ => false,
+            // 1.5 shapes every Brahmic script in the map *except* Thai/Lao
+            // (which need dictionary line breaking — added in 1.6).
+            EngineVersion::V1_5 => !matches!(f, Face::Thai | Face::Lao),
+            EngineVersion::V1_6 => true,
         };
         shaped.then_some(f)
     }
 
     /// Mirror `Bidi_Mirrored` characters in right-to-left runs (engine
-    /// 1.5, UAX #9 HL6).
+    /// 1.5+, UAX #9 HL6).
     fn mirror(self) -> bool {
-        matches!(self, EngineVersion::V1_5)
+        matches!(self, EngineVersion::V1_5 | EngineVersion::V1_6)
+    }
+
+    /// Use dictionary-based line breaking for spaceless scripts
+    /// (Thai/Lao, engine 1.6).
+    fn dict_break(self) -> bool {
+        matches!(self, EngineVersion::V1_6)
     }
 }
 
@@ -199,7 +221,7 @@ impl Default for LayoutOptions {
         LayoutOptions {
             page_width_um: 210_000,
             page_height_um: 297_000,
-            engine: EngineVersion::V1_4,
+            engine: EngineVersion::V1_6,
         }
     }
 }
@@ -905,7 +927,14 @@ impl Engine<'_> {
         } else {
             None
         };
-        let lines = break_lines_hyphenated(lt, size_um, width.max(1), hyph);
+        // Dictionary break opportunities for spaceless scripts (Thai/Lao,
+        // engine 1.6). Empty otherwise, so the breaker is unchanged.
+        let dict_breaks = if self.opts.engine.dict_break() {
+            dict_breaks_for(&lt.text)
+        } else {
+            Vec::new()
+        };
+        let lines = break_lines_hyphenated(lt, size_um, width.max(1), hyph, &dict_breaks);
         let justify = justify && self.opts.engine.justify();
         lines
             .iter()
@@ -1402,6 +1431,38 @@ fn offset_op(op: Op, dy: i64) -> Op {
             res,
         },
     }
+}
+
+/// Absolute byte offsets in `text` where a line may break inside a
+/// spaceless script run (Thai/Lao, engine 1.6). Each maximal run of a
+/// single dictionary-segmentable face is segmented by its pinned
+/// dictionary; the boundaries are returned ascending so the line breaker
+/// can scan them in order.
+fn dict_breaks_for(text: &str) -> Vec<usize> {
+    let mut breaks = Vec::new();
+    let mut chars = text.char_indices().peekable();
+    while let Some(&(off, c)) = chars.peek() {
+        let dict = Face::shaped_for(c).and_then(crate::dict::Dictionary::for_face);
+        if let Some(dict) = dict {
+            let face = Face::shaped_for(c);
+            let run_start = off;
+            let mut run_end = off;
+            while let Some(&(o2, c2)) = chars.peek() {
+                if Face::shaped_for(c2) == face {
+                    run_end = o2 + c2.len_utf8();
+                    chars.next();
+                } else {
+                    break;
+                }
+            }
+            for rel in dict.segment(&text[run_start..run_end]) {
+                breaks.push(run_start + rel);
+            }
+        } else {
+            chars.next();
+        }
+    }
+    breaks
 }
 
 /// Emit one homogeneous segment `[s, e)` at absolute x `x`. A shaped

@@ -1764,3 +1764,75 @@ fn engine_1_5_mirrors_brackets_in_rtl() {
         "engine 1.2 must not produce glyph runs (no mirroring)"
     );
 }
+
+/// Engine 1.6 shapes Thai/Lao and breaks their spaceless text into lines
+/// at dictionary-word boundaries. On a narrow page a Thai paragraph must
+/// wrap to multiple lines, each within the content width, with the
+/// logical text preserved across the wrap; engine 1.5 still refuses Thai.
+#[test]
+fn engine_1_6_shapes_and_breaks_thai() {
+    use vsd_core::layout::DisplayOp;
+    use vsd_layout::{EngineVersion, LayoutOptions, RecomputeOutcome};
+
+    // A long, spaceless Thai paragraph (no inter-word spaces at all).
+    let thai = "ภาษาไทยเป็นภาษาที่สวยงามและมีเอกลักษณ์เฉพาะตัวซึ่งเขียนติดกันโดยไม่มีการเว้นวรรค";
+    let doc = DocumentBuilder::new(Node::Doc(Doc {
+        lang: "th".into(),
+        dir: Direction::Ltr,
+        children: vec![Node::Para(Para {
+            children: vec![Inline::Text(thai.into())],
+        })],
+    }))
+    .build()
+    .unwrap();
+
+    // Narrow page so the paragraph must wrap.
+    let opts = LayoutOptions {
+        page_width_um: 60_000,
+        page_height_um: 200_000,
+        engine: EngineVersion::V1_6,
+    };
+    let content_w_mm = 60.0 - 2.0 * 20.0; // page − margins
+    let pages = vsd_layout::layout_document(&doc, &opts).unwrap();
+
+    // Every Thai run is a GlyphRun in the Thai face (17); collect them in
+    // page order and check width + logical-text preservation.
+    let mut thai_runs = 0usize;
+    let mut joined = String::new();
+    for op in pages.iter().flat_map(|p| &p.ops) {
+        if let DisplayOp::GlyphRun {
+            font, glyphs, text, ..
+        } = op
+        {
+            assert_eq!(*font, 17, "Thai must use face 17");
+            assert!(glyphs.iter().all(|g| g.gid != 0), "no .notdef");
+            let w: f64 = glyphs.iter().map(|g| g.x_advance).sum();
+            assert!(
+                w <= content_w_mm + 0.5,
+                "line wider than content box: {w} mm"
+            );
+            joined.push_str(text);
+            thai_runs += 1;
+        }
+    }
+    // Dictionary breaking actually wrapped the paragraph.
+    assert!(thai_runs >= 2, "Thai paragraph must wrap to >=2 lines");
+    // Logical text is preserved across the wrap (no characters lost or
+    // reordered; Thai is LTR so visual order == logical within a line).
+    assert_eq!(joined, thai, "wrapped Thai must reconstruct the source");
+
+    // Cache pins 1.6.0 and recomputes byte-identically.
+    let laid = vsd_layout::add_render_cache(&doc, &opts).unwrap();
+    let cache = laid.render_cache().unwrap().unwrap();
+    assert_eq!(cache.engine_version, "1.6.0");
+    assert!(matches!(
+        vsd_layout::verify_render_cache(&laid).unwrap(),
+        RecomputeOutcome::Match { .. }
+    ));
+
+    // Frozen contract: engine 1.5 refuses Thai (it had no dictionary).
+    assert!(matches!(
+        vsd_layout::layout_document(&doc, &opts.with_engine(EngineVersion::V1_5)),
+        Err(vsd_layout::LayoutError::Unsupported(_))
+    ));
+}

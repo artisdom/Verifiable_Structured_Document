@@ -32,6 +32,10 @@ static FONT_TELUGU: &[u8] = include_bytes!("../assets/NotoSansTelugu-Regular.ttf
 static FONT_KANNADA: &[u8] = include_bytes!("../assets/NotoSansKannada-Regular.ttf");
 static FONT_MALAYALAM: &[u8] = include_bytes!("../assets/NotoSansMalayalam-Regular.ttf");
 static FONT_SINHALA: &[u8] = include_bytes!("../assets/NotoSansSinhala-Regular.ttf");
+// Engine 1.6 — Thai and Lao (LAYOUT-1.6.md §2), shaped by the same
+// pinned `rustybuzz`; their line breaking is dictionary-based (§3).
+static FONT_THAI: &[u8] = include_bytes!("../assets/NotoSansThai-Regular.ttf");
+static FONT_LAO: &[u8] = include_bytes!("../assets/NotoSansLao-Regular.ttf");
 
 /// A face of the pinned family. Display lists carry the index in
 /// `TextRun::font` / `GlyphRun::font`. Engine 1.0 only ever emits
@@ -58,10 +62,12 @@ pub enum Face {
     Kannada = 14,
     Malayalam = 15,
     Sinhala = 16,
+    Thai = 17,
+    Lao = 18,
 }
 
 impl Face {
-    pub const ALL: [Face; 17] = [
+    pub const ALL: [Face; 19] = [
         Face::Regular,
         Face::Bold,
         Face::Italic,
@@ -79,6 +85,8 @@ impl Face {
         Face::Kannada,
         Face::Malayalam,
         Face::Sinhala,
+        Face::Thai,
+        Face::Lao,
     ];
 
     pub fn index(self) -> u64 {
@@ -105,6 +113,8 @@ impl Face {
             14 => Face::Kannada,
             15 => Face::Malayalam,
             16 => Face::Sinhala,
+            17 => Face::Thai,
+            18 => Face::Lao,
             _ => Face::Regular,
         }
     }
@@ -136,6 +146,10 @@ impl Face {
             '\u{0C80}'..='\u{0CFF}' => Some(Face::Kannada),
             '\u{0D00}'..='\u{0D7F}' => Some(Face::Malayalam),
             '\u{0D80}'..='\u{0DFF}' => Some(Face::Sinhala),
+            // Thai and Lao (engine 1.6) — shaped here, but their *line
+            // breaking* is dictionary-based (no inter-word spaces).
+            '\u{0E00}'..='\u{0E7F}' => Some(Face::Thai),
+            '\u{0E80}'..='\u{0EFF}' => Some(Face::Lao),
             _ => None,
         }
     }
@@ -155,6 +169,8 @@ impl Face {
                 | Face::Kannada
                 | Face::Malayalam
                 | Face::Sinhala
+                | Face::Thai
+                | Face::Lao
         )
     }
 
@@ -212,6 +228,8 @@ impl Face {
             Face::Kannada => FONT_KANNADA,
             Face::Malayalam => FONT_MALAYALAM,
             Face::Sinhala => FONT_SINHALA,
+            Face::Thai => FONT_THAI,
+            Face::Lao => FONT_LAO,
         }
     }
 
@@ -234,6 +252,8 @@ impl Face {
             Face::Kannada => "NotoSansKannada-Regular",
             Face::Malayalam => "NotoSansMalayalam-Regular",
             Face::Sinhala => "NotoSansSinhala-Regular",
+            Face::Thai => "NotoSansThai-Regular",
+            Face::Lao => "NotoSansLao-Regular",
         }
     }
 }
@@ -255,7 +275,7 @@ pub struct FontMetrics {
     pub line_gap_units: i64,
 }
 
-static METRICS: OnceLock<[FontMetrics; 17]> = OnceLock::new();
+static METRICS: OnceLock<[FontMetrics; 19]> = OnceLock::new();
 
 impl FontMetrics {
     fn parse_face(bytes: &'static [u8]) -> FontMetrics {
@@ -269,7 +289,7 @@ impl FontMetrics {
         }
     }
 
-    fn all() -> &'static [FontMetrics; 17] {
+    fn all() -> &'static [FontMetrics; 19] {
         METRICS.get_or_init(|| Face::ALL.map(|f| Self::parse_face(f.bytes())))
     }
 

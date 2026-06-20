@@ -304,17 +304,23 @@ pub struct Line {
 }
 
 /// Greedy first-fit line breaking with optional Knuth–Liang
-/// hyphenation (LAYOUT-1.3.md §2). With `hyph = None` the output is
-/// byte-identical to the 1.0 contract; with a hyphenator, a word that
-/// overflows the current line is broken at the longest hyphenation
-/// point whose prefix (plus a hyphen) still fits, before falling back
-/// to moving the whole word down or — only for unhyphenatable
-/// overflow — force-breaking by glyph.
+/// hyphenation (LAYOUT-1.3.md §2) and optional dictionary break points
+/// (LAYOUT-1.6.md §3). With `hyph = None` and `dict_breaks = &[]` the
+/// output is byte-identical to the 1.0 contract; with a hyphenator, an
+/// overflowing word breaks at the longest hyphenation point whose prefix
+/// (plus a hyphen) fits; with dictionary break points (Thai/Lao, which
+/// have no inter-word spaces), an overflowing run breaks at the longest
+/// dictionary-word boundary that fits (zero width, no hyphen). Both fall
+/// back to moving the run down whole and finally — only for
+/// unbreakable overflow — to force-breaking by glyph.
+///
+/// `dict_breaks` are absolute byte offsets into `lt.text`, ascending.
 pub fn break_lines_hyphenated(
     lt: &LayoutText,
     size_um: i64,
     max_width_um: i64,
     hyph: Option<&Hyphenator>,
+    dict_breaks: &[usize],
 ) -> Vec<Line> {
     let mut lines = Vec::new();
     if lt.text.is_empty() {
@@ -326,7 +332,17 @@ pub fn break_lines_hyphenated(
         let ws = pos;
         let we = pos + word.len();
         pos = we + 1; // step over the separating space
-        lay_word(lt, size_um, max_width_um, hyph, ws, we, &mut lines, &mut st);
+        lay_word(
+            lt,
+            size_um,
+            max_width_um,
+            hyph,
+            dict_breaks,
+            ws,
+            we,
+            &mut lines,
+            &mut st,
+        );
     }
     if st.width > 0 || st.start < lt.text.len() {
         lines.push(Line {
@@ -353,6 +369,7 @@ fn lay_word(
     size_um: i64,
     max_width_um: i64,
     hyph: Option<&Hyphenator>,
+    dict_breaks: &[usize],
     ws: usize,
     we: usize,
     lines: &mut Vec<Line>,
@@ -370,9 +387,34 @@ fn lay_word(
     }
     // The word does not fit after the current content.
     if st.width > 0 {
-        // Try to hyphenate a prefix onto the current line.
+        let budget = max_width_um - st.width - sep_w;
+        // Prefer a dictionary-word boundary (Thai/Lao): zero-width, no
+        // hyphen. Take the longest prefix that fits on the current line.
+        if let Some(bb) = best_dict_prefix(dict_breaks, lt, ws, we, size_um, budget) {
+            let content = st.width + sep_w + lt.width_um(ws, bb, size_um);
+            lines.push(Line {
+                start: st.start,
+                end: bb,
+                width_um: content,
+                hyphen: false,
+            });
+            st.start = bb;
+            st.width = 0;
+            lay_word_fresh(
+                lt,
+                size_um,
+                max_width_um,
+                hyph,
+                dict_breaks,
+                bb,
+                we,
+                lines,
+                st,
+            );
+            return;
+        }
+        // Else try to hyphenate a prefix onto the current line.
         if let Some(h) = hyph {
-            let budget = max_width_um - st.width - sep_w;
             if let Some(rel) = best_hyphen_prefix(lt, h, ws, we, size_um, budget) {
                 let bb = ws + rel;
                 let content = st.width + sep_w + lt.width_um(ws, bb, size_um);
@@ -384,12 +426,21 @@ fn lay_word(
                 });
                 st.start = bb;
                 st.width = 0;
-                lay_word_fresh(lt, size_um, max_width_um, hyph, bb, we, lines, st);
+                lay_word_fresh(
+                    lt,
+                    size_um,
+                    max_width_um,
+                    hyph,
+                    dict_breaks,
+                    bb,
+                    we,
+                    lines,
+                    st,
+                );
                 return;
             }
         }
-        // No hyphen prefix fit: flush the current line, place the word
-        // on a fresh one.
+        // No prefix fit: flush the current line, place the word fresh.
         lines.push(Line {
             start: st.start,
             end: ws.saturating_sub(1),
@@ -399,7 +450,17 @@ fn lay_word(
         st.start = ws;
         st.width = 0;
     }
-    lay_word_fresh(lt, size_um, max_width_um, hyph, ws, we, lines, st);
+    lay_word_fresh(
+        lt,
+        size_um,
+        max_width_um,
+        hyph,
+        dict_breaks,
+        ws,
+        we,
+        lines,
+        st,
+    );
 }
 
 /// Place a word `[ws, we)` starting on an empty line, hyphenating or
@@ -411,6 +472,7 @@ fn lay_word_fresh(
     size_um: i64,
     max_width_um: i64,
     hyph: Option<&Hyphenator>,
+    dict_breaks: &[usize],
     mut ws: usize,
     we: usize,
     lines: &mut Vec<Line>,
@@ -422,6 +484,17 @@ fn lay_word_fresh(
             st.start = ws;
             st.width = word_w;
             return;
+        }
+        // Dictionary boundary first (Thai/Lao): longest prefix that fits.
+        if let Some(bb) = best_dict_prefix(dict_breaks, lt, ws, we, size_um, max_width_um) {
+            lines.push(Line {
+                start: ws,
+                end: bb,
+                width_um: lt.width_um(ws, bb, size_um),
+                hyphen: false,
+            });
+            ws = bb;
+            continue;
         }
         if let Some(h) = hyph {
             if let Some(rel) = best_hyphen_prefix(lt, h, ws, we, size_um, max_width_um) {
@@ -462,6 +535,39 @@ fn lay_word_fresh(
         st.width = seg_width;
         return;
     }
+}
+
+/// The largest dictionary break point (absolute byte offset strictly
+/// inside `(ws, we)`) whose prefix `[ws, b)` fits within `budget` µm, or
+/// `None` if none fits or there are no dictionary breaks in range. The
+/// break is zero-width (no hyphen), so the prefix width is the content
+/// width directly. `dict_breaks` is ascending.
+fn best_dict_prefix(
+    dict_breaks: &[usize],
+    lt: &LayoutText,
+    ws: usize,
+    we: usize,
+    size_um: i64,
+    budget: i64,
+) -> Option<usize> {
+    if budget <= 0 {
+        return None;
+    }
+    let mut best = None;
+    for &b in dict_breaks {
+        if b <= ws {
+            continue;
+        }
+        if b >= we {
+            break; // ascending: no further candidate is in range
+        }
+        if lt.width_um(ws, b, size_um) <= budget {
+            best = Some(b); // ascending: keep the longest that fits
+        } else {
+            break; // wider prefixes only grow; stop early
+        }
+    }
+    best
 }
 
 /// The largest hyphenation break (relative byte offset within
@@ -657,7 +763,7 @@ mod tests {
         let w_space = font.space_advance_um(size);
         // Width fits exactly the first two words.
         let max = font.text_width_um("aaa", size) + w_space + font.text_width_um("bbb", size);
-        let lines = break_lines_hyphenated(&lt, size, max, None);
+        let lines = break_lines_hyphenated(&lt, size, max, None, &[]);
         assert_eq!(lines.len(), 2);
         assert_eq!(&lt.text[lines[0].start..lines[0].end], "aaa bbb");
         assert_eq!(&lt.text[lines[1].start..lines[1].end], "ccc");
@@ -669,7 +775,7 @@ mod tests {
         let size = 3881;
         let lt = plain("abcdefgh");
         let max = font.text_width_um("abc", size); // ~3 glyphs per line
-        let lines = break_lines_hyphenated(&lt, size, max, None);
+        let lines = break_lines_hyphenated(&lt, size, max, None, &[]);
         assert!(lines.len() >= 2);
         // Every line has at least one glyph and no line exceeds max.
         for l in &lines {
@@ -690,8 +796,8 @@ mod tests {
         // "establishment" + the next word, so the second word hyphenates.
         let lt = plain("establishment hyphenation");
         let max = font.text_width_um("establishment hyphen", size);
-        let plain_lines = break_lines_hyphenated(&lt, size, max, None);
-        let hyph_lines = break_lines_hyphenated(&lt, size, max, Some(h));
+        let plain_lines = break_lines_hyphenated(&lt, size, max, None, &[]);
+        let hyph_lines = break_lines_hyphenated(&lt, size, max, Some(h), &[]);
         // Without hyphenation the second word moves down whole.
         assert!(plain_lines.iter().all(|l| !l.hyphen));
         // With hyphenation, a line ends at a mid-word break.
@@ -730,8 +836,8 @@ mod tests {
         let lt = plain("the cat sat on a mat by the door");
         let max = font.text_width_um("the cat sat", size);
         assert_eq!(
-            break_lines_hyphenated(&lt, size, max, None),
-            break_lines_hyphenated(&lt, size, max, Some(h)),
+            break_lines_hyphenated(&lt, size, max, None, &[]),
+            break_lines_hyphenated(&lt, size, max, Some(h), &[]),
         );
     }
 
