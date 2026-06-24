@@ -19,6 +19,11 @@ pub struct StylePolicy {
     pub underline: bool,
     /// Per-character script fallback to the Hebrew face (LAYOUT-1.2.md).
     pub script_fallback: bool,
+    /// Route the engine-1.9 complex scripts (Tibetan, Khmer, Myanmar,
+    /// Ethiopic) and CJK punctuation/fullwidth forms to their faces
+    /// (LAYOUT-1.9.md). Gated per version because these blocks were never
+    /// in the historical refusal set.
+    pub extended_scripts: bool,
 }
 
 impl StylePolicy {
@@ -28,6 +33,7 @@ impl StylePolicy {
         mono: false,
         underline: false,
         script_fallback: false,
+        extended_scripts: false,
     };
     /// Engine 1.1: real bold/italic faces.
     pub const V1_1: StylePolicy = StylePolicy {
@@ -35,6 +41,7 @@ impl StylePolicy {
         mono: false,
         underline: false,
         script_fallback: false,
+        extended_scripts: false,
     };
     /// Engine 1.2: + mono, underline, script fallback.
     pub const V1_2: StylePolicy = StylePolicy {
@@ -42,11 +49,20 @@ impl StylePolicy {
         mono: true,
         underline: true,
         script_fallback: true,
+        extended_scripts: false,
     };
     /// Engine 1.4 reuses the 1.2 style policy (the shaped scripts it
     /// adds are routed by `script_fallback`); the shaping itself is not
-    /// a style-table behavior.
+    /// a style-table behavior. Engines 1.4–1.8 share it.
     pub const V1_4: StylePolicy = StylePolicy::V1_2;
+    /// Engine 1.9: + extended complex scripts and CJK punctuation routing.
+    pub const V1_9: StylePolicy = StylePolicy {
+        bold_italic: true,
+        mono: true,
+        underline: true,
+        script_fallback: true,
+        extended_scripts: true,
+    };
 }
 
 /// A block's layout text plus attribution ranges (byte ranges into the
@@ -59,6 +75,8 @@ pub struct LayoutText {
     pub underlines: Vec<(usize, usize)>,
     /// Whether width/face queries apply per-character script fallback.
     pub script_fallback: bool,
+    /// Whether to route engine-1.9 extended scripts + CJK punctuation.
+    pub extended_scripts: bool,
 }
 
 impl LayoutText {
@@ -76,11 +94,28 @@ impl LayoutText {
     /// The face a specific character is measured and drawn with.
     pub fn face_for(&self, byte: usize, c: char) -> Face {
         let styled = self.face_at(byte);
-        if self.script_fallback {
-            styled.for_char(c)
-        } else {
-            styled
+        if !self.script_fallback {
+            return styled;
         }
+        // Base routing (Hebrew + the shaped scripts that every
+        // script-fallback engine already refused, and the CJK core):
+        // safe for all engines because for_char only diverges from the
+        // styled face on codepoints those engines never set.
+        let base = styled.for_char(c);
+        if base != styled {
+            return base;
+        }
+        // Extended routing (engine 1.9): the complex scripts and CJK
+        // punctuation that were historically left on the Regular path.
+        if self.extended_scripts {
+            if let Some(f) = Face::extended_for(c) {
+                return f;
+            }
+            if Face::is_cjk_punct(c) {
+                return Face::Cjk;
+            }
+        }
+        styled
     }
 
     /// Advance of an inserted hyphen `-` at a break ending at
@@ -201,6 +236,7 @@ pub fn layout_text(inlines: &[Inline], styles: &[Style], policy: StylePolicy) ->
         faces,
         underlines,
         script_fallback: policy.script_fallback,
+        extended_scripts: policy.extended_scripts,
     }
 }
 
@@ -653,6 +689,7 @@ mod tests {
             faces: vec![],
             underlines: vec![],
             script_fallback: false,
+            extended_scripts: false,
         }
     }
 

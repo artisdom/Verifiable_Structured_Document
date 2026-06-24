@@ -16,7 +16,7 @@ members = [
 exclude = ["fuzz"]
 
 [workspace.package]
-version = "0.18.0"
+version = "0.19.0"
 edition = "2021"
 rust-version = "1.85"
 license = "Apache-2.0"
@@ -26,13 +26,13 @@ keywords = ["document", "format", "verifiable", "pdf", "cbor"]
 categories = ["encoding", "parser-implementations"]
 
 [workspace.dependencies]
-vsd-core = { path = "crates/vsd-core", version = "0.18.0", default-features = false }
-vsd-container = { path = "crates/vsd-container", version = "0.18.0", default-features = false }
-vsd-sign = { path = "crates/vsd-sign", version = "0.18.0", default-features = false }
-vsd-layout = { path = "crates/vsd-layout", version = "0.18.0" }
-vsd-render = { path = "crates/vsd-render", version = "0.18.0" }
-vsd-pdf = { path = "crates/vsd-pdf", version = "0.18.0" }
-vsd-tlog = { path = "crates/vsd-tlog", version = "0.18.0" }
+vsd-core = { path = "crates/vsd-core", version = "0.19.0", default-features = false }
+vsd-container = { path = "crates/vsd-container", version = "0.19.0", default-features = false }
+vsd-sign = { path = "crates/vsd-sign", version = "0.19.0", default-features = false }
+vsd-layout = { path = "crates/vsd-layout", version = "0.19.0" }
+vsd-render = { path = "crates/vsd-render", version = "0.19.0" }
+vsd-pdf = { path = "crates/vsd-pdf", version = "0.19.0" }
+vsd-tlog = { path = "crates/vsd-tlog", version = "0.19.0" }
 
 blake3 = { version = "1.5", default-features = false }
 thiserror = { version = "2", default-features = false }

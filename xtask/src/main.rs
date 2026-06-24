@@ -279,6 +279,27 @@ fn gen_vectors() -> Result<()> {
         "note": "engine 1.8 (LAYOUT-1.8.md): vertical-rl writing mode (format-0.5 'wm' doc attribute) — characters stack top-to-bottom, columns advance right-to-left; one positioned text run per character, logical order preserved",
     }));
 
+    // Engine 1.9: the remaining complex scripts + CJK punctuation routing.
+    let extended = extended_scripts_doc()?;
+    let opts_19 = vsd_layout::LayoutOptions {
+        page_width_um: 90_000,
+        page_height_um: 140_000,
+        engine: vsd_layout::EngineVersion::V1_9,
+    };
+    let laid_19 = vsd_layout::add_render_cache(&extended, &opts_19)?;
+    let laid_19_bytes = write_document(&laid_19, &[], &WriteOptions { compress: false })?;
+    write(&valid.join("laid-out-1.9.vsd"), &laid_19_bytes)?;
+    let cache_19 = laid_19.render_cache()?.expect("cache present");
+    valid_entries.push(json!({
+        "file": "valid/laid-out-1.9.vsd",
+        "doc_id": laid_19.document_id()?.to_hex(),
+        "profile": "core",
+        "layout_engine": "vsd-layout/1.9.0",
+        "layout_hash": hex::encode(cache_19.layout_hash),
+        "layout_pages": cache_19.pages.len(),
+        "note": "engine 1.9 (LAYOUT-1.9.md): Tibetan (tsheg line breaking), Khmer + Myanmar (dictionary line breaking), Ethiopic, shaped by the pinned rustybuzz; plus CJK punctuation/fullwidth forms set in the pan-CJK face. Routed via the engine-1.9 style policy; no format change",
+    }));
+
     let (redacted, predecessor_id, proof) = redacted_doc()?;
     let red_bytes = write_document(&redacted, &[], &WriteOptions { compress: false })?;
     write(&valid.join("redacted.vsd"), &red_bytes)?;
@@ -824,6 +845,45 @@ fn vertical_doc() -> Result<Document> {
     Ok(DocumentBuilder::new(root)
         .metadata(Metadata {
             title: Some("VSD conformance: engine 1.8 vertical writing".into()),
+            ..Default::default()
+        })
+        .build()?)
+}
+
+fn extended_scripts_doc() -> Result<Document> {
+    let root = Node::Doc(Doc {
+        lang: "mul".into(),
+        dir: Direction::Ltr,
+        writing_mode: vsd_core::tree::WritingMode::Horizontal,
+        children: vec![
+            // Tibetan: breaks at the tsheg (no spaces).
+            Node::Para(Para {
+                children: vec![Inline::Text(
+                    "བོད་སྐད་ནི་བོད་ཀྱི་སྐད་ཡིག་ཡིན་ཞིང་དེ་ནི་ཧ་ཅང་རྙིང་པའི་སྐད་ཡིག་ཅིག་རེད།".into(),
+                )],
+            }),
+            // Khmer and Myanmar: spaceless, dictionary line breaking.
+            Node::Para(Para {
+                children: vec![Inline::Text("ភាសាខ្មែរជាភាសាផ្លូវការរបស់ប្រទេសកម្ពុជា".into())],
+            }),
+            Node::Para(Para {
+                children: vec![Inline::Text("မြန်မာဘာသာသည်မြန်မာနိုင်ငံ၏ရုံးသုံးဘာသာဖြစ်သည်".into())],
+            }),
+            // Ethiopic: word-spaced.
+            Node::Para(Para {
+                children: vec![Inline::Text("አማርኛ የኢትዮጵያ ብሔራዊ ቋንቋ ነው።".into())],
+            }),
+            // CJK with punctuation: under 1.9 the punctuation 「」、。
+            // is set in the pan-CJK face rather than left on the Regular
+            // path.
+            Node::Para(Para {
+                children: vec![Inline::Text("日本語の「引用」、テスト。".into())],
+            }),
+        ],
+    });
+    Ok(DocumentBuilder::new(root)
+        .metadata(Metadata {
+            title: Some("VSD conformance: engine 1.9 extended complex scripts".into()),
             ..Default::default()
         })
         .build()?)

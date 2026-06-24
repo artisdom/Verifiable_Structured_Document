@@ -22,6 +22,8 @@ use crate::font::Face;
 
 static THAI_TXT: &str = include_str!("../assets/thaidict.txt");
 static LAO_TXT: &str = include_str!("../assets/laodict.txt");
+static KHMER_TXT: &str = include_str!("../assets/khmerdict.txt");
+static BURMESE_TXT: &str = include_str!("../assets/burmesedict.txt");
 
 /// A pinned word list and the longest-match segmenter over it.
 pub struct Dictionary {
@@ -45,11 +47,27 @@ impl Dictionary {
         D.get_or_init(|| Dictionary::parse(LAO_TXT))
     }
 
+    /// The pinned Khmer dictionary (ICU `khmerdict.txt`, SHA-256
+    /// `87bee2d17cd5148aa36957eb05409eefc124de8ad519b81b789298ef3e60b5d9`).
+    pub fn khmer() -> &'static Dictionary {
+        static D: OnceLock<Dictionary> = OnceLock::new();
+        D.get_or_init(|| Dictionary::parse(KHMER_TXT))
+    }
+
+    /// The pinned Burmese (Myanmar) dictionary (ICU `burmesedict.txt`,
+    /// SHA-256 `61d8abc3d9102b2f9bf0c9f44db0d7ab89b18172d8cd26832e4c83174bd8673b`).
+    pub fn burmese() -> &'static Dictionary {
+        static D: OnceLock<Dictionary> = OnceLock::new();
+        D.get_or_init(|| Dictionary::parse(BURMESE_TXT))
+    }
+
     /// The dictionary that segments a shaped face's script, if any.
     pub fn for_face(face: Face) -> Option<&'static Dictionary> {
         match face {
             Face::Thai => Some(Dictionary::thai()),
             Face::Lao => Some(Dictionary::lao()),
+            Face::Khmer => Some(Dictionary::khmer()),
+            Face::Myanmar => Some(Dictionary::burmese()),
             _ => None,
         }
     }
@@ -116,7 +134,26 @@ mod tests {
         // The pinned word lists parse to tens of thousands of entries.
         assert!(Dictionary::thai().words.len() > 20_000);
         assert!(Dictionary::lao().words.len() > 20_000);
+        assert!(Dictionary::khmer().words.len() > 20_000);
+        assert!(Dictionary::burmese().words.len() > 20_000);
         assert!(Dictionary::thai().max_chars >= 2);
+    }
+
+    #[test]
+    fn khmer_and_burmese_segment_to_valid_boundaries() {
+        // Boundaries (if any) must be in range, ascending, and on char
+        // boundaries — for both spaceless scripts. (Functional wrapping
+        // is covered by the integration test over real paragraphs.)
+        for (d, phrase) in [
+            (Dictionary::khmer(), "ភាសាខ្មែរជាភាសាមួយ"),
+            (Dictionary::burmese(), "မြန်မာဘာသာစကား"),
+        ] {
+            let breaks = d.segment(phrase);
+            assert!(breaks
+                .iter()
+                .all(|&o| o > 0 && o < phrase.len() && phrase.is_char_boundary(o)));
+            assert!(breaks.windows(2).all(|w| w[0] < w[1]));
+        }
     }
 
     #[test]

@@ -216,13 +216,16 @@ scripts have no inter-word spaces; reuses the `glyphs` op, no format
 change), `vsd-layout/1.7.0`
 ([docs/LAYOUT-1.7.md](../docs/LAYOUT-1.7.md), adds CJK — Han, kana,
 Hangul — in horizontal writing, rendered per glyph from a pinned pan-CJK
-CFF face with inter-ideograph line breaking; no format change), and
-`vsd-layout/1.8.0` ([docs/LAYOUT-1.8.md](../docs/LAYOUT-1.8.md), adds
+CFF face with inter-ideograph line breaking; no format change), `vsd-layout/1.8.0` ([docs/LAYOUT-1.8.md](../docs/LAYOUT-1.8.md), adds
 **vertical writing mode** `vertical-rl` via the format-0.5 `wm` doc
 attribute — characters stack top-to-bottom, columns advance
-right-to-left; horizontal documents are byte-identical to 1.7). Each
-engine version is frozen: the conformance corpus pins one golden vector
-per version and a conforming reader MUST reproduce all of them.
+right-to-left; horizontal documents are byte-identical to 1.7), and
+`vsd-layout/1.9.0` ([docs/LAYOUT-1.9.md](../docs/LAYOUT-1.9.md), adds the
+remaining complex scripts — Tibetan, Khmer, Myanmar, Ethiopic — and CJK
+punctuation/fullwidth routing, via a version-gated style policy so frozen
+engines are byte-identical; no format change). Each engine version is
+frozen: the conformance corpus pins one golden vector per version and a
+conforming reader MUST reproduce all of them.
 
 ## 8. (reserved)
 

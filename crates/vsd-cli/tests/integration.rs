@@ -2065,3 +2065,109 @@ fn engine_1_8_vertical_writing_mode() {
         Err(vsd_layout::LayoutError::Unsupported(_))
     ));
 }
+
+/// Engine 1.9 lays out the remaining complex scripts (Tibetan with tsheg
+/// breaking shown here) and routes CJK punctuation into the pan-CJK face.
+/// Engine 1.8 leaves both on the Regular path (the version-gated routing
+/// keeps frozen engines byte-identical), proven here.
+#[test]
+fn engine_1_9_extended_scripts_and_cjk_punctuation() {
+    use vsd_core::layout::DisplayOp;
+    use vsd_layout::{EngineVersion, LayoutOptions, RecomputeOutcome};
+
+    let tibetan = "བོད་སྐད་ནི་བོད་ཀྱི་སྐད་ཡིག་ཡིན།";
+    let cjkp = "日本語「引用」。";
+    let doc = DocumentBuilder::new(Node::Doc(Doc {
+        lang: "mul".into(),
+        dir: Direction::Ltr,
+        writing_mode: vsd_core::tree::WritingMode::Horizontal,
+        children: vec![
+            Node::Para(Para {
+                children: vec![Inline::Text(tibetan.into())],
+            }),
+            Node::Para(Para {
+                children: vec![Inline::Text(cjkp.into())],
+            }),
+        ],
+    }))
+    .build()
+    .unwrap();
+
+    let opts = LayoutOptions {
+        page_width_um: 70_000,
+        page_height_um: 200_000,
+        engine: EngineVersion::V1_9,
+    };
+    let pages = vsd_layout::layout_document(&doc, &opts).unwrap();
+
+    let mut tibetan_runs = 0usize;
+    let mut saw_cjk_punct = false;
+    let mut joined = String::new();
+    for op in pages.iter().flat_map(|p| &p.ops) {
+        match op {
+            DisplayOp::GlyphRun {
+                font, glyphs, text, ..
+            } => {
+                if *font == 20 {
+                    assert!(glyphs.iter().all(|g| g.gid != 0), "Tibetan .notdef");
+                    tibetan_runs += 1;
+                }
+                joined.push_str(text);
+            }
+            DisplayOp::TextRun { font, text, .. } => {
+                if *font == 19 && (text.contains('。') || text.contains('\u{300C}')) {
+                    saw_cjk_punct = true;
+                }
+                joined.push_str(text);
+            }
+            _ => {}
+        }
+    }
+    assert!(tibetan_runs >= 2, "Tibetan must wrap at tsheg to >=2 runs");
+    assert!(
+        saw_cjk_punct,
+        "CJK punctuation must be set in the pan-CJK face under 1.9"
+    );
+    assert_eq!(joined, format!("{tibetan}{cjkp}"), "logical text preserved");
+
+    // Cache pins 1.9.0 and recomputes byte-identically; raster + PDF ok.
+    let laid = vsd_layout::add_render_cache(&doc, &opts).unwrap();
+    let cache = laid.render_cache().unwrap().unwrap();
+    assert_eq!(cache.engine_version, "1.9.0");
+    assert!(matches!(
+        vsd_layout::verify_render_cache(&laid).unwrap(),
+        RecomputeOutcome::Match { .. }
+    ));
+    let page = vsd_core::layout::Page::from_value(&laid.store.get_value(&cache.pages[0]).unwrap())
+        .unwrap();
+    assert!(!vsd_render::render_page_png(&laid, &page, 96.0)
+        .unwrap()
+        .is_empty());
+    assert!(
+        !vsd_pdf::export_pdf(&laid, None, &vsd_pdf::ExportOptions::default())
+            .unwrap()
+            .is_empty()
+    );
+
+    // Frozen contract: engine 1.8 routes neither — Tibetan stays on the
+    // Regular path (no face-20 run) and CJK punctuation stays Regular
+    // (no face-19 run carrying it). So a frozen engine is byte-identical.
+    let pages_18 =
+        vsd_layout::layout_document(&doc, &opts.with_engine(EngineVersion::V1_8)).unwrap();
+    let any_tibetan_18 = pages_18
+        .iter()
+        .flat_map(|p| &p.ops)
+        .any(|op| matches!(op, DisplayOp::GlyphRun { font, .. } if *font == 20));
+    let any_cjk_punct_18 = pages_18.iter().flat_map(|p| &p.ops).any(|op| {
+        matches!(op, DisplayOp::TextRun { font, text, .. }
+            if *font == 19 && (text.contains('。') || text.contains('\u{300C}')))
+    });
+    assert!(
+        !any_tibetan_18,
+        "engine 1.8 must not route Tibetan (frozen)"
+    );
+    assert!(
+        !any_cjk_punct_18,
+        "engine 1.8 must not route CJK punctuation (frozen)"
+    );
+}

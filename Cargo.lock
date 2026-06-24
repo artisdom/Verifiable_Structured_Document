@@ -2836,7 +2836,7 @@ checksum = "0b928f33d975fc6ad9f86c8f283853ad26bdd5b10b7f1542aa2fa15e2289105a"
 
 [[package]]
 name = "vsd-cli"
-version = "0.18.0"
+version = "0.19.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -2857,7 +2857,7 @@ dependencies = [
 
 [[package]]
 name = "vsd-container"
-version = "0.18.0"
+version = "0.19.0"
 dependencies = [
  "blake3",
  "ruzstd",
@@ -2868,7 +2868,7 @@ dependencies = [
 
 [[package]]
 name = "vsd-core"
-version = "0.18.0"
+version = "0.19.0"
 dependencies = [
  "blake3",
  "hex",
@@ -2879,7 +2879,7 @@ dependencies = [
 
 [[package]]
 name = "vsd-layout"
-version = "0.18.0"
+version = "0.19.0"
 dependencies = [
  "blake3",
  "rustybuzz",
@@ -2891,7 +2891,7 @@ dependencies = [
 
 [[package]]
 name = "vsd-pdf"
-version = "0.18.0"
+version = "0.19.0"
 dependencies = [
  "hex",
  "lopdf",
@@ -2906,7 +2906,7 @@ dependencies = [
 
 [[package]]
 name = "vsd-render"
-version = "0.18.0"
+version = "0.19.0"
 dependencies = [
  "thiserror 2.0.18",
  "tiny-skia",
@@ -2916,7 +2916,7 @@ dependencies = [
 
 [[package]]
 name = "vsd-sign"
-version = "0.18.0"
+version = "0.19.0"
 dependencies = [
  "der",
  "ed25519-dalek",
@@ -2931,7 +2931,7 @@ dependencies = [
 
 [[package]]
 name = "vsd-tlog"
-version = "0.18.0"
+version = "0.19.0"
 dependencies = [
  "blake3",
  "ed25519-dalek",
@@ -2942,7 +2942,7 @@ dependencies = [
 
 [[package]]
 name = "vsd-view"
-version = "0.18.0"
+version = "0.19.0"
 dependencies = [
  "anyhow",
  "arboard",
@@ -2958,7 +2958,7 @@ dependencies = [
 
 [[package]]
 name = "vsd-web"
-version = "0.18.0"
+version = "0.19.0"
 dependencies = [
  "serde_json",
  "vsd-container",

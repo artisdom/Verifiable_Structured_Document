@@ -85,6 +85,12 @@ pub enum EngineVersion {
     /// (CJK vertical typesetting). Horizontal documents are laid out
     /// exactly as in 1.7. Uses the format-0.5 `wm` doc attribute.
     V1_8,
+    /// LAYOUT-1.9.md — the remaining major complex scripts: Tibetan
+    /// (tsheg line breaking), Khmer + Myanmar (dictionary line breaking),
+    /// and Ethiopic; plus CJK punctuation / fullwidth forms set in the
+    /// pan-CJK face. Routed via the engine-1.9 style policy so frozen
+    /// engines are unaffected. No format change.
+    V1_9,
 }
 
 impl EngineVersion {
@@ -99,6 +105,7 @@ impl EngineVersion {
             EngineVersion::V1_6 => "1.6.0",
             EngineVersion::V1_7 => "1.7.0",
             EngineVersion::V1_8 => "1.8.0",
+            EngineVersion::V1_9 => "1.9.0",
         }
     }
 
@@ -113,6 +120,7 @@ impl EngineVersion {
             "1.6.0" => Some(EngineVersion::V1_6),
             "1.7.0" => Some(EngineVersion::V1_7),
             "1.8.0" => Some(EngineVersion::V1_8),
+            "1.9.0" => Some(EngineVersion::V1_9),
             _ => None,
         }
     }
@@ -132,6 +140,8 @@ impl EngineVersion {
             | EngineVersion::V1_6
             | EngineVersion::V1_7
             | EngineVersion::V1_8 => crate::text::StylePolicy::V1_4,
+            // 1.9 adds extended-script + CJK-punctuation face routing.
+            EngineVersion::V1_9 => crate::text::StylePolicy::V1_9,
         }
     }
 
@@ -148,26 +158,16 @@ impl EngineVersion {
     }
 
     fn hyphenate(self) -> bool {
-        matches!(
+        !matches!(
             self,
-            EngineVersion::V1_3
-                | EngineVersion::V1_4
-                | EngineVersion::V1_5
-                | EngineVersion::V1_6
-                | EngineVersion::V1_7
-                | EngineVersion::V1_8
+            EngineVersion::V1_0 | EngineVersion::V1_1 | EngineVersion::V1_2
         )
     }
 
     fn widow_orphan(self) -> bool {
-        matches!(
+        !matches!(
             self,
-            EngineVersion::V1_3
-                | EngineVersion::V1_4
-                | EngineVersion::V1_5
-                | EngineVersion::V1_6
-                | EngineVersion::V1_7
-                | EngineVersion::V1_8
+            EngineVersion::V1_0 | EngineVersion::V1_1 | EngineVersion::V1_2
         )
     }
 
@@ -188,7 +188,10 @@ impl EngineVersion {
             // 1.5 shapes every Brahmic script in the map *except* Thai/Lao
             // (which need dictionary line breaking — added in 1.6).
             EngineVersion::V1_5 => !matches!(f, Face::Thai | Face::Lao),
-            EngineVersion::V1_6 | EngineVersion::V1_7 | EngineVersion::V1_8 => true,
+            EngineVersion::V1_6
+            | EngineVersion::V1_7
+            | EngineVersion::V1_8
+            | EngineVersion::V1_9 => true,
         };
         shaped.then_some(f)
     }
@@ -196,31 +199,50 @@ impl EngineVersion {
     /// Mirror `Bidi_Mirrored` characters in right-to-left runs (engine
     /// 1.5+, UAX #9 HL6).
     fn mirror(self) -> bool {
-        matches!(
+        !matches!(
             self,
-            EngineVersion::V1_5 | EngineVersion::V1_6 | EngineVersion::V1_7 | EngineVersion::V1_8
+            EngineVersion::V1_0
+                | EngineVersion::V1_1
+                | EngineVersion::V1_2
+                | EngineVersion::V1_3
+                | EngineVersion::V1_4
         )
     }
 
     /// Use dictionary-based line breaking for spaceless scripts
-    /// (Thai/Lao, engine 1.6+).
+    /// (Thai/Lao since 1.6; Khmer/Myanmar since 1.9).
     fn dict_break(self) -> bool {
-        matches!(
+        !matches!(
             self,
-            EngineVersion::V1_6 | EngineVersion::V1_7 | EngineVersion::V1_8
+            EngineVersion::V1_0
+                | EngineVersion::V1_1
+                | EngineVersion::V1_2
+                | EngineVersion::V1_3
+                | EngineVersion::V1_4
+                | EngineVersion::V1_5
         )
     }
 
     /// Lay out CJK (Han/kana/Hangul) instead of refusing it, with
     /// inter-ideograph line breaking (engine 1.7+).
     fn allows_cjk(self) -> bool {
-        matches!(self, EngineVersion::V1_7 | EngineVersion::V1_8)
+        matches!(
+            self,
+            EngineVersion::V1_7 | EngineVersion::V1_8 | EngineVersion::V1_9
+        )
     }
 
-    /// Support vertical writing mode (`vertical-rl`, engine 1.8). Earlier
+    /// Support vertical writing mode (`vertical-rl`, engine 1.8+). Earlier
     /// engines refuse a document whose `writing_mode` is vertical.
     fn vertical(self) -> bool {
-        matches!(self, EngineVersion::V1_8)
+        matches!(self, EngineVersion::V1_8 | EngineVersion::V1_9)
+    }
+
+    /// Route the engine-1.9 extended complex scripts (Tibetan, Khmer,
+    /// Myanmar, Ethiopic) and CJK punctuation to their faces, with
+    /// Tibetan tsheg line breaking.
+    fn extended(self) -> bool {
+        matches!(self, EngineVersion::V1_9)
     }
 }
 
@@ -268,7 +290,7 @@ impl Default for LayoutOptions {
         LayoutOptions {
             page_width_um: 210_000,
             page_height_um: 297_000,
-            engine: EngineVersion::V1_8,
+            engine: EngineVersion::V1_9,
         }
     }
 }
@@ -1162,6 +1184,9 @@ impl Engine<'_> {
         if self.opts.engine.allows_cjk() {
             extra_breaks.extend(cjk_break_points(&lt.text));
         }
+        if self.opts.engine.extended() {
+            extra_breaks.extend(tibetan_break_points(&lt.text));
+        }
         extra_breaks.sort_unstable();
         extra_breaks.dedup();
         let lines = break_lines_hyphenated(lt, size_um, width.max(1), hyph, &extra_breaks);
@@ -1723,6 +1748,24 @@ fn cjk_break_points(text: &str) -> Vec<usize> {
     breaks
 }
 
+/// Tibetan line-break opportunities (engine 1.9): a break is permitted
+/// after an intersyllabic tsheg (U+0F0B) or a shad (U+0F0D), the
+/// punctuation Tibetan uses in place of spaces. Returned as absolute byte
+/// offsets in `text`, ascending. The non-breaking delimiter tsheg
+/// (U+0F0C) deliberately yields no break.
+fn tibetan_break_points(text: &str) -> Vec<usize> {
+    let mut breaks = Vec::new();
+    for (i, c) in text.char_indices() {
+        if matches!(c, '\u{0F0B}' | '\u{0F0D}') {
+            let after = i + c.len_utf8();
+            if after < text.len() {
+                breaks.push(after);
+            }
+        }
+    }
+    breaks
+}
+
 /// A character that must not end a line (no break immediately after) —
 /// opening brackets/quotes (kinsoku).
 fn cjk_no_break_after(c: char) -> bool {
@@ -2006,6 +2049,7 @@ mod tests {
             faces: vec![(7, 9, Face::Bold)],
             underlines: vec![],
             script_fallback: false,
+            extended_scripts: false,
         };
         let segs = segment_line(0, 10, &lt);
         assert_eq!(
@@ -2028,6 +2072,7 @@ mod tests {
             faces: vec![],
             underlines: vec![(0, 2)],
             script_fallback: true,
+            extended_scripts: false,
         };
         let segs = segment_line(0, lt.text.len(), &lt);
         // "ab" underlined; " " regular; "שלום" Hebrew face; " cd" regular.

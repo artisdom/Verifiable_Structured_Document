@@ -40,6 +40,14 @@ static FONT_LAO: &[u8] = include_bytes!("../assets/NotoSansLao-Regular.ttf");
 // font (CID-keyed, Adobe-Identity-0 ROS → CID == GID). Not shaped: Han,
 // kana, and hangul render per glyph; line breaking is inter-ideograph.
 static FONT_CJK: &[u8] = include_bytes!("../assets/NotoSansCJKsc-Regular.otf");
+// Engine 1.9 — the remaining major complex scripts (LAYOUT-1.9.md §2),
+// shaped by the same pinned `rustybuzz`. Khmer/Myanmar are spaceless
+// (dictionary line breaking); Tibetan breaks at the tsheg; Ethiopic uses
+// spaces.
+static FONT_TIBETAN: &[u8] = include_bytes!("../assets/NotoSerifTibetan-Regular.ttf");
+static FONT_KHMER: &[u8] = include_bytes!("../assets/NotoSansKhmer-Regular.ttf");
+static FONT_MYANMAR: &[u8] = include_bytes!("../assets/NotoSansMyanmar-Regular.ttf");
+static FONT_ETHIOPIC: &[u8] = include_bytes!("../assets/NotoSansEthiopic-Regular.ttf");
 
 /// A face of the pinned family. Display lists carry the index in
 /// `TextRun::font` / `GlyphRun::font`. Engine 1.0 only ever emits
@@ -69,10 +77,14 @@ pub enum Face {
     Thai = 17,
     Lao = 18,
     Cjk = 19,
+    Tibetan = 20,
+    Khmer = 21,
+    Myanmar = 22,
+    Ethiopic = 23,
 }
 
 impl Face {
-    pub const ALL: [Face; 20] = [
+    pub const ALL: [Face; 24] = [
         Face::Regular,
         Face::Bold,
         Face::Italic,
@@ -93,6 +105,10 @@ impl Face {
         Face::Thai,
         Face::Lao,
         Face::Cjk,
+        Face::Tibetan,
+        Face::Khmer,
+        Face::Myanmar,
+        Face::Ethiopic,
     ];
 
     pub fn index(self) -> u64 {
@@ -122,6 +138,10 @@ impl Face {
             17 => Face::Thai,
             18 => Face::Lao,
             19 => Face::Cjk,
+            20 => Face::Tibetan,
+            21 => Face::Khmer,
+            22 => Face::Myanmar,
+            23 => Face::Ethiopic,
             _ => Face::Regular,
         }
     }
@@ -178,7 +198,39 @@ impl Face {
                 | Face::Sinhala
                 | Face::Thai
                 | Face::Lao
+                | Face::Tibetan
+                | Face::Khmer
+                | Face::Myanmar
+                | Face::Ethiopic
         )
+    }
+
+    /// The face for a complex script added in engine 1.9 (Tibetan, Khmer,
+    /// Myanmar, Ethiopic), or `None`. Kept **separate** from
+    /// [`Face::shaped_for`] (and routed only under the engine-1.9 style
+    /// policy) because these blocks were never in the historical refusal
+    /// set: routing them unconditionally would change a frozen engine's
+    /// output for a document that contains them.
+    pub fn extended_for(c: char) -> Option<Face> {
+        match c {
+            '\u{0F00}'..='\u{0FFF}' => Some(Face::Tibetan),
+            '\u{1000}'..='\u{109F}' | '\u{A9E0}'..='\u{A9FF}' | '\u{AA60}'..='\u{AA7F}' => {
+                Some(Face::Myanmar)
+            }
+            '\u{1200}'..='\u{139F}' | '\u{2D80}'..='\u{2DDF}' | '\u{AB00}'..='\u{AB2F}' => {
+                Some(Face::Ethiopic)
+            }
+            '\u{1780}'..='\u{17FF}' | '\u{19E0}'..='\u{19FF}' => Some(Face::Khmer),
+            _ => None,
+        }
+    }
+
+    /// CJK punctuation and fullwidth forms (U+3000–303F, U+FF00–FFEF) —
+    /// set in the pan-CJK face under the engine-1.9 style policy. These
+    /// ranges sit just outside the historical CJK refusal set (so they
+    /// are gated, like [`Face::extended_for`], not routed by default).
+    pub fn is_cjk_punct(c: char) -> bool {
+        matches!(c, '\u{3000}'..='\u{303F}' | '\u{FF00}'..='\u{FFEF}')
     }
 
     pub fn pick(bold: bool, italic: bool) -> Face {
@@ -241,6 +293,10 @@ impl Face {
             Face::Thai => FONT_THAI,
             Face::Lao => FONT_LAO,
             Face::Cjk => FONT_CJK,
+            Face::Tibetan => FONT_TIBETAN,
+            Face::Khmer => FONT_KHMER,
+            Face::Myanmar => FONT_MYANMAR,
+            Face::Ethiopic => FONT_ETHIOPIC,
         }
     }
 
@@ -266,6 +322,10 @@ impl Face {
             Face::Thai => "NotoSansThai-Regular",
             Face::Lao => "NotoSansLao-Regular",
             Face::Cjk => "NotoSansCJKsc-Regular",
+            Face::Tibetan => "NotoSerifTibetan-Regular",
+            Face::Khmer => "NotoSansKhmer-Regular",
+            Face::Myanmar => "NotoSansMyanmar-Regular",
+            Face::Ethiopic => "NotoSansEthiopic-Regular",
         }
     }
 }
@@ -309,7 +369,7 @@ pub struct FontMetrics {
     pub line_gap_units: i64,
 }
 
-static METRICS: OnceLock<[FontMetrics; 20]> = OnceLock::new();
+static METRICS: OnceLock<[FontMetrics; 24]> = OnceLock::new();
 
 impl FontMetrics {
     fn parse_face(bytes: &'static [u8]) -> FontMetrics {
@@ -323,7 +383,7 @@ impl FontMetrics {
         }
     }
 
-    fn all() -> &'static [FontMetrics; 20] {
+    fn all() -> &'static [FontMetrics; 24] {
         METRICS.get_or_init(|| Face::ALL.map(|f| Self::parse_face(f.bytes())))
     }
 

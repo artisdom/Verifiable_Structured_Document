@@ -147,6 +147,15 @@
       "profile": "core"
     },
     {
+      "doc_id": "b467aacb4cc58b1218f89f28c99195002503d66b45aad4389a6fd65e25c057ba",
+      "file": "valid/laid-out-1.9.vsd",
+      "layout_engine": "vsd-layout/1.9.0",
+      "layout_hash": "ad5ce893e3a0c9d2361d7f169c6d45bfac26a479ea2d89cf4fa56857b75db65c",
+      "layout_pages": 1,
+      "note": "engine 1.9 (LAYOUT-1.9.md): Tibetan (tsheg line breaking), Khmer + Myanmar (dictionary line breaking), Ethiopic, shaped by the pinned rustybuzz; plus CJK punctuation/fullwidth forms set in the pan-CJK face. Routed via the engine-1.9 style policy; no format change",
+      "profile": "core"
+    },
+    {
       "doc_id": "4b07642d82e039f19187a1855881f0703b10c98c5641cb21d58649b54c32cb86",
       "file": "valid/redacted.vsd",
       "must_not_contain": "TOP-SECRET-ACCOUNT-9912",

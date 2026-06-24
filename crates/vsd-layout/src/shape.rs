@@ -190,6 +190,26 @@ mod tests {
     }
 
     #[test]
+    fn engine_1_9_complex_scripts_shape_with_real_glyphs() {
+        // Tibetan, Khmer, Myanmar, Ethiopic — each shaped by the same
+        // pinned shaper; every glyph must be real (font + shaper agree).
+        for (face, word) in [
+            (Face::Tibetan, "བོད་སྐད"),
+            (Face::Khmer, "ភាសាខ្មែរ"),
+            (Face::Myanmar, "မြန်မာ"),
+            (Face::Ethiopic, "አማርኛ"),
+        ] {
+            let shaped = shape_run(face, word, 3881);
+            assert!(!shaped.glyphs.is_empty(), "{face:?} produced no glyphs");
+            assert!(shaped.width_um > 0, "{face:?} has zero width");
+            assert!(
+                shaped.glyphs.iter().all(|g| g.gid != 0),
+                "{face:?} hit .notdef — font/shaper coverage gap"
+            );
+        }
+    }
+
+    #[test]
     fn mirrored_rtl_swaps_brackets_keeps_letters_and_reverses() {
         // "(א)" — a Hebrew letter in parens. Drawn RTL, the opening
         // paren must become the closing-paren glyph and vice versa, and
