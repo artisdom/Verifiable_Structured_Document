@@ -125,6 +125,7 @@ pub fn import_pdf(bytes: &[u8], recovery: &dyn StructureRecovery) -> Result<Impo
     let root = Node::Doc(Doc {
         lang: "und".into(), // language is unknowable from a foreign PDF
         dir: Direction::Ltr,
+        writing_mode: vsd_core::tree::WritingMode::Horizontal,
         children: blocks,
     });
     let root_id_preview = vsd_core::ObjectId::of_value(&root.to_value()?)?;

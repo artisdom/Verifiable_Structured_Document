@@ -57,6 +57,8 @@ pub struct Salted {
 pub struct Doc {
     pub lang: String,
     pub dir: Direction,
+    /// Block flow / inline direction of the document (format 0.5).
+    pub writing_mode: WritingMode,
     pub children: Vec<Node>,
 }
 
@@ -64,6 +66,18 @@ pub struct Doc {
 pub enum Direction {
     Ltr,
     Rtl,
+}
+
+/// Document writing mode (format 0.5). `Horizontal` is `horizontal-tb`
+/// (lines run left/right per `dir`, stacked top-to-bottom — the default
+/// and the only mode before engine 1.8). `VerticalRl` is `vertical-rl`:
+/// characters stack top-to-bottom in a column and columns advance
+/// right-to-left (CJK vertical typesetting).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum WritingMode {
+    #[default]
+    Horizontal,
+    VerticalRl,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -320,6 +334,13 @@ impl Node {
                         Direction::Rtl => "rtl",
                     }),
                 )
+                .put(
+                    "wm",
+                    Value::text(match d.writing_mode {
+                        WritingMode::Horizontal => "htb",
+                        WritingMode::VerticalRl => "vrl",
+                    }),
+                )
                 .put("children", nodes_to_value(&d.children)?)
                 .build(),
             Node::Section(s) => MapBuilder::new()
@@ -417,15 +438,21 @@ impl Node {
         let t = req_text(v, "t", "node")?;
         match t.as_str() {
             "doc" => {
-                check_keys(v, &["t", "lang", "dir", "children"], "doc")?;
+                check_keys(v, &["t", "lang", "dir", "wm", "children"], "doc")?;
                 let dir = match req_text(v, "dir", "doc")?.as_str() {
                     "ltr" => Direction::Ltr,
                     "rtl" => Direction::Rtl,
                     other => return Err(Error::Schema(format!("doc: bad dir {other:?}"))),
                 };
+                let writing_mode = match req_text(v, "wm", "doc")?.as_str() {
+                    "htb" => WritingMode::Horizontal,
+                    "vrl" => WritingMode::VerticalRl,
+                    other => return Err(Error::Schema(format!("doc: bad wm {other:?}"))),
+                };
                 Ok(Node::Doc(Doc {
                     lang: req_text(v, "lang", "doc")?,
                     dir,
+                    writing_mode,
                     children: nodes_from_value(req(v, "children", "doc")?, "doc")?,
                 }))
             }
@@ -758,6 +785,7 @@ mod tests {
         Node::Doc(Doc {
             lang: "en".into(),
             dir: Direction::Ltr,
+            writing_mode: WritingMode::Horizontal,
             children: vec![
                 Node::Heading(Heading {
                     level: 1,

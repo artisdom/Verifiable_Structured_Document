@@ -297,12 +297,20 @@ forever against their pinned engine.
       greedy breaker. The CFF face embeds in PDF as `FontFile3` /
       `CIDFontType0` (a new path; every TrueType face still uses
       `FontFile2`). No format change; 1.0–1.6 hashes unchanged;
-      per-version gating keeps 1.6 refusing CJK. ☐ Still refused:
-      **vertical writing mode** (`vertical-rl` — needs an additive
-      `writing-mode` format change + column geometry; its own future
-      version), CJK punctuation/fullwidth routing, PDF font subsetting,
-      and complex scripts beyond the major Brahmic + Thai/Lao + CJK set
-      (Myanmar, Khmer, Tibetan, Ethiopic, …).
+      per-version gating keeps 1.6 refusing CJK. **Engine 1.8 shipped
+      (v0.18, [docs/LAYOUT-1.8.md](docs/LAYOUT-1.8.md))**: **vertical
+      writing mode** (`vertical-rl`) via the additive format-0.5 `wm` doc
+      attribute — characters stack top-to-bottom, columns advance
+      right-to-left, one positioned run per character so op order is
+      reading order. Horizontal documents are byte-identical to 1.7
+      (only `doc_id`s move under the 0.5 bump; 1.0–1.7 layout hashes
+      unchanged). Paragraphs + headings supported; other blocks and
+      shaped scripts refused in vertical mode rather than mis-rendered.
+      ☐ Still refused / deferred: vertical tables/lists/code &
+      tate-chu-yoko, CJK punctuation/fullwidth face routing, PDF font
+      subsetting (CJK PDFs embed the full 16 MB font), and complex
+      scripts beyond the major Brahmic + Thai/Lao + CJK set (Myanmar,
+      Khmer, Tibetan, Ethiopic, …).
 - [ ] **2j. Advanced page layout**: floats & multi-column (needs a
       `columns` block attribute — an additive format change) and MathML
       layout (today math renders via its fallback image or as code).
@@ -634,6 +642,7 @@ core spec before a working prototype and an adversarial review.
 | **0.15** ✅ | Engine 1.5 Brahmic + mirroring | Bengali/Gurmukhi/Gujarati/Oriya/Tamil/Telugu/Kannada/Malayalam/Sinhala shaping (same pinned rustybuzz) + UAX #9 bidi mirroring (pinned Unicode 17.0.0 table); reuses `glyphs` op (no format change); every prior `.vsd` byte-identical, 1.0–1.4 hashes unchanged |
 | **0.16** ✅ | Engine 1.6 Thai/Lao | Thai + Lao shaping + dictionary-based line breaking (forward longest-match over pinned ICU word lists; spaceless scripts); reuses `glyphs` op (no format change); 1.0–1.5 hashes unchanged |
 | **0.17** ✅ | Engine 1.7 CJK (horizontal) | Han/kana/Hangul in the pinned full Noto Sans CJK SC face (16 MB CFF, CID==GID); per-glyph layout + inter-ideograph line breaking (kinsoku); new CFF `FontFile3`/`CIDFontType0` PDF path; no format change; 1.0–1.6 hashes unchanged |
+| **0.18** ✅ | Engine 1.8 vertical text | `vertical-rl` writing mode via additive format-0.5 `wm` doc attribute; top-to-bottom columns advancing right-to-left; one positioned run/char (op order = reading order); horizontal byte-identical to 1.7 (1.0–1.7 layout hashes unchanged) |
 | **1.0** | Freeze | Spec 1.0, two implementations, audit complete, ISO/W3C track |
 
 *Versioning policy:* the format major version and the crate versions decouple

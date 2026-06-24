@@ -37,21 +37,21 @@
   },
   "valid": [
     {
-      "doc_id": "5f37700a0a4390005b70352d024694243c289676eca98535087000e42936fcfa",
+      "doc_id": "14ed385d14db539ba122291a62f3a524b217363dbe6adaef7e45a12f4ff61b3f",
       "file": "valid/minimal.vsd",
       "note": "smallest interesting document: heading, paragraph, table, figure",
       "objects": 4,
       "profile": "core"
     },
     {
-      "doc_id": "5f37700a0a4390005b70352d024694243c289676eca98535087000e42936fcfa",
+      "doc_id": "14ed385d14db539ba122291a62f3a524b217363dbe6adaef7e45a12f4ff61b3f",
       "file": "valid/minimal-compressed.vsd",
       "note": "same document id as minimal.vsd: identity survives recompression (spec 2.4)",
       "objects": 4,
       "profile": "core"
     },
     {
-      "doc_id": "5f37700a0a4390005b70352d024694243c289676eca98535087000e42936fcfa",
+      "doc_id": "14ed385d14db539ba122291a62f3a524b217363dbe6adaef7e45a12f4ff61b3f",
       "file": "valid/signed.vsd",
       "note": "one valid ed25519 document-scope signature (deterministic test key)",
       "profile": "core",
@@ -59,23 +59,23 @@
       "signer_pubkey": "197f6b23e16c8532c6abc838facd5ea789be0c76b2920334039bfa8b3d368d61"
     },
     {
-      "doc_id": "7d96d87f0c188638bad303097586693e779ef0e53bb35f132c9a2aa7578dbb99",
+      "doc_id": "437019d0882a51a7ce46f4af9c5b161f41e46bd0f58c764a2e701a5d48d39111",
       "file": "valid/form-filled.vsd",
       "note": "field layer with filled values, computed field, and constraints",
       "profile": "form"
     },
     {
-      "doc_id": "e4d60cdf5d920e42d0aa3cedf84991e18c377c3383f5c03439dbc692559decb2",
+      "doc_id": "74dcd3022680cd4315d5b072d40109d5c7aa70970564c82cec8286490f4e41f5",
       "file": "valid/laid-out.vsd",
       "layout_engine": "vsd-layout/1.0.0",
       "layout_hash": "d8855aa04af0521620012ab4286784a882160adc4b0a75fa63d4eb2911b75335",
       "layout_pages": 1,
       "note": "render cache from vsd-layout/1.0; recomputing layout MUST reproduce these exact page objects (LAYOUT-1.0.md)",
-      "predecessor": "5f37700a0a4390005b70352d024694243c289676eca98535087000e42936fcfa",
+      "predecessor": "14ed385d14db539ba122291a62f3a524b217363dbe6adaef7e45a12f4ff61b3f",
       "profile": "core"
     },
     {
-      "doc_id": "7ecedce337ec8be7eb4c8e8e960b65fc8389b184fed608edf222ea9f902e4eeb",
+      "doc_id": "178f07a0fad548992e58cbeaa5cab7450c49a206363463caca71b54e0d2495e3",
       "file": "valid/laid-out-1.1.vsd",
       "layout_engine": "vsd-layout/1.1.0",
       "layout_hash": "cdde447a16578e794667d163c063905662a819a546cd5ba9914a8a0135c380ad",
@@ -84,7 +84,7 @@
       "profile": "core"
     },
     {
-      "doc_id": "a870e98a2ad7b3d3bb930eba1557fea6252cc89effc77dd48a49aff7b31ac2e6",
+      "doc_id": "48bc295a4ac0d1c033b8065fab43c00eadc68caee88462b41e003f2cde122398",
       "file": "valid/laid-out-1.2.vsd",
       "layout_engine": "vsd-layout/1.2.0",
       "layout_hash": "9a687c483245cdf9f77f786e41c710dce722ee76fa78e0c9fad25598fc429931",
@@ -93,7 +93,7 @@
       "profile": "core"
     },
     {
-      "doc_id": "fbf5369778cc6c477be9921c3d4af5aa71f31b5f29766a75125a40aa9e7ef6b9",
+      "doc_id": "701827e5e9a78babde9750a8f509efc5fcd8e0ace2be1ed5717ff9a60c4f534a",
       "file": "valid/laid-out-1.3.vsd",
       "layout_engine": "vsd-layout/1.3.0",
       "layout_hash": "1b89f7cf292e28b3eb81349910e6f4d4e6670c9f3decdb2d978b3869546d68e5",
@@ -102,7 +102,7 @@
       "profile": "core"
     },
     {
-      "doc_id": "386cff392179f0682edd2ca1cb9956463f8c3ccc854a8a2bd7dc890ce664bf59",
+      "doc_id": "c348b324420fd361aa42474fbeb098725dfd0a3a519055efcf4203c8791f57e0",
       "file": "valid/laid-out-1.4.vsd",
       "layout_engine": "vsd-layout/1.4.0",
       "layout_hash": "07aac55cfbb1c6c925657395b5a81e1d2388c5ca246bb307754c7f5bac1904a3",
@@ -111,7 +111,7 @@
       "profile": "core"
     },
     {
-      "doc_id": "7325338dfb29a3d2a2d3c033ed22196524580a234e30ad8ede458ef2a109c9d8",
+      "doc_id": "f7aa62560bc34f70a0ea03ac8a8c03426e2fbeb8191c700ced65b21a8010b593",
       "file": "valid/laid-out-1.5.vsd",
       "layout_engine": "vsd-layout/1.5.0",
       "layout_hash": "bc8b1e5c4d9719353c3aeecd86765ce09cc57d4fbcd9e1f94eeed88df23ffd99",
@@ -120,7 +120,7 @@
       "profile": "core"
     },
     {
-      "doc_id": "4b6f3457875499538c85c073de496ed28ffe2e27af934c61238c39d9be1e2acc",
+      "doc_id": "8575860c81efd978a9daff276e8e5cb6b54e1c638b06fdf1983f000a604b9044",
       "file": "valid/laid-out-1.6.vsd",
       "layout_engine": "vsd-layout/1.6.0",
       "layout_hash": "b1924580349d70b85a63be082ab060a6d491fe7be74146581f97b6a70cd2a800",
@@ -129,7 +129,7 @@
       "profile": "core"
     },
     {
-      "doc_id": "d43569d551fa484864855a4d098f34cb47e73168590f4f94ef01ad6412d970e6",
+      "doc_id": "f97dce26c12df8e588f430b18287bdcbfd9e613750b5c8e5359b040d8f8807a8",
       "file": "valid/laid-out-1.7.vsd",
       "layout_engine": "vsd-layout/1.7.0",
       "layout_hash": "3107d5f47cbd66bd96ecbb8f6fa40ff1a4fc649fa765154094db0d8d8bdda28e",
@@ -138,25 +138,34 @@
       "profile": "core"
     },
     {
-      "doc_id": "8079236045ad4f0e947e6f0cb8a2c8b255087d548a87c9613e80a27f7ec86ae9",
+      "doc_id": "b953232eeb5d3c13d7c40d071a01f7a46df8aae10f4a23f0e8fc3cf0224caf02",
+      "file": "valid/laid-out-1.8.vsd",
+      "layout_engine": "vsd-layout/1.8.0",
+      "layout_hash": "0bf39b9b1d8982090a0231901d259f3781d408a2d2a43263b11a8b2f4fa80905",
+      "layout_pages": 1,
+      "note": "engine 1.8 (LAYOUT-1.8.md): vertical-rl writing mode (format-0.5 'wm' doc attribute) — characters stack top-to-bottom, columns advance right-to-left; one positioned text run per character, logical order preserved",
+      "profile": "core"
+    },
+    {
+      "doc_id": "4b07642d82e039f19187a1855881f0703b10c98c5641cb21d58649b54c32cb86",
       "file": "valid/redacted.vsd",
       "must_not_contain": "TOP-SECRET-ACCOUNT-9912",
       "note": "destructive redaction: the secret exists in no byte of this file (spec 7.2)",
-      "predecessor": "af43ac8ecfb2f70df987301cc523a69ff1a32dbad42fbb440b1eeaa705221282",
+      "predecessor": "1dfae440ed77dc95b599faee871e8a15ce318f53ea2227777142e57d3e1cd9a7",
       "profile": "core",
       "redaction_proof": "2f276889128c255308132d88ed99a03306565d39f5d40c2d12797c5515f3108c"
     },
     {
-      "doc_id": "34396cc9134dd871e0049de45c0073e613407fda9c92cf4834ab133f0e544582",
+      "doc_id": "23d3152da8aa49d0e055617589f7701c3b884b379f5b6dceca4a1b9758aec201",
       "file": "valid/sealed-salted.vsd",
       "note": "every top-level block hoisted behind a salted SubtreeRef (deterministic salts for the corpus)",
-      "predecessor": "5f37700a0a4390005b70352d024694243c289676eca98535087000e42936fcfa",
+      "predecessor": "14ed385d14db539ba122291a62f3a524b217363dbe6adaef7e45a12f4ff61b3f",
       "profile": "core"
     },
     {
       "disclosed_contains": "Service Agreement",
       "disclosed_index": 0,
-      "doc_id": "34396cc9134dd871e0049de45c0073e613407fda9c92cf4834ab133f0e544582",
+      "doc_id": "23d3152da8aa49d0e055617589f7701c3b884b379f5b6dceca4a1b9758aec201",
       "file": "valid/disclosure.vsdp",
       "hidden_siblings": 3,
       "kind": "disclosure-bundle",

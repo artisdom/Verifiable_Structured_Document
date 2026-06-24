@@ -257,6 +257,28 @@ fn gen_vectors() -> Result<()> {
         "note": "engine 1.7 (LAYOUT-1.7.md): CJK (Han/kana/Hangul) in the pinned pan-CJK CFF face, rendered per glyph with inter-ideograph line breaking (simple kinsoku); horizontal writing; reuses the format-0.4 display list, no format change",
     }));
 
+    // Engine 1.8: vertical writing mode (vertical-rl). A small page makes
+    // the Japanese paragraph fill several columns right-to-left.
+    let vertical = vertical_doc()?;
+    let opts_18 = vsd_layout::LayoutOptions {
+        page_width_um: 80_000,
+        page_height_um: 120_000,
+        engine: vsd_layout::EngineVersion::V1_8,
+    };
+    let laid_18 = vsd_layout::add_render_cache(&vertical, &opts_18)?;
+    let laid_18_bytes = write_document(&laid_18, &[], &WriteOptions { compress: false })?;
+    write(&valid.join("laid-out-1.8.vsd"), &laid_18_bytes)?;
+    let cache_18 = laid_18.render_cache()?.expect("cache present");
+    valid_entries.push(json!({
+        "file": "valid/laid-out-1.8.vsd",
+        "doc_id": laid_18.document_id()?.to_hex(),
+        "profile": "core",
+        "layout_engine": "vsd-layout/1.8.0",
+        "layout_hash": hex::encode(cache_18.layout_hash),
+        "layout_pages": cache_18.pages.len(),
+        "note": "engine 1.8 (LAYOUT-1.8.md): vertical-rl writing mode (format-0.5 'wm' doc attribute) — characters stack top-to-bottom, columns advance right-to-left; one positioned text run per character, logical order preserved",
+    }));
+
     let (redacted, predecessor_id, proof) = redacted_doc()?;
     let red_bytes = write_document(&redacted, &[], &WriteOptions { compress: false })?;
     write(&valid.join("redacted.vsd"), &red_bytes)?;
@@ -402,6 +424,7 @@ fn minimal_doc() -> Result<Document> {
     let mut builder = DocumentBuilder::new(Node::Doc(Doc {
         lang: "en".into(),
         dir: Direction::Ltr,
+        writing_mode: vsd_core::tree::WritingMode::Horizontal,
         children: vec![],
     }));
     let blob_id = builder.add_object(blob.to_value())?;
@@ -409,6 +432,7 @@ fn minimal_doc() -> Result<Document> {
     let root = Node::Doc(Doc {
         lang: "en".into(),
         dir: Direction::Ltr,
+        writing_mode: vsd_core::tree::WritingMode::Horizontal,
         children: vec![
             Node::Heading(Heading {
                 level: 1,
@@ -501,6 +525,7 @@ fn styled_doc() -> Result<Document> {
     let root = Node::Doc(Doc {
         lang: "en".into(),
         dir: Direction::Ltr,
+        writing_mode: vsd_core::tree::WritingMode::Horizontal,
         children: vec![
             Node::Heading(Heading {
                 level: 1,
@@ -541,6 +566,7 @@ fn widened_doc() -> Result<Document> {
     let root = Node::Doc(Doc {
         lang: "en".into(),
         dir: Direction::Ltr,
+        writing_mode: vsd_core::tree::WritingMode::Horizontal,
         children: vec![
             Node::Heading(Heading {
                 level: 1,
@@ -613,6 +639,7 @@ fn furniture_doc() -> Result<Document> {
     let root = Node::Doc(Doc {
         lang: "en".into(),
         dir: Direction::Ltr,
+        writing_mode: vsd_core::tree::WritingMode::Horizontal,
         children: vec![
             Node::Heading(Heading {
                 level: 1,
@@ -650,6 +677,7 @@ fn shaped_doc() -> Result<Document> {
     let root = Node::Doc(Doc {
         lang: "en".into(),
         dir: Direction::Ltr,
+        writing_mode: vsd_core::tree::WritingMode::Horizontal,
         children: vec![
             Node::Heading(Heading {
                 level: 1,
@@ -676,6 +704,7 @@ fn mirrored_indic_doc() -> Result<Document> {
     let root = Node::Doc(Doc {
         lang: "he".into(),
         dir: Direction::Rtl,
+        writing_mode: vsd_core::tree::WritingMode::Horizontal,
         children: vec![
             Node::Heading(Heading {
                 level: 1,
@@ -711,6 +740,7 @@ fn thai_doc() -> Result<Document> {
     let root = Node::Doc(Doc {
         lang: "th".into(),
         dir: Direction::Ltr,
+        writing_mode: vsd_core::tree::WritingMode::Horizontal,
         children: vec![
             Node::Heading(Heading {
                 level: 1,
@@ -744,7 +774,7 @@ fn thai_doc() -> Result<Document> {
 fn cjk_doc() -> Result<Document> {
     let root = Node::Doc(Doc {
         lang: "zh".into(),
-        dir: Direction::Ltr,
+        dir: Direction::Ltr, writing_mode: vsd_core::tree::WritingMode::Horizontal,
         children: vec![
             Node::Heading(Heading {
                 level: 1,
@@ -772,10 +802,38 @@ fn cjk_doc() -> Result<Document> {
         .build()?)
 }
 
+fn vertical_doc() -> Result<Document> {
+    let root = Node::Doc(Doc {
+        lang: "ja".into(),
+        dir: Direction::Ltr,
+        writing_mode: vsd_core::tree::WritingMode::VerticalRl,
+        children: vec![
+            Node::Heading(Heading {
+                level: 1,
+                children: vec![Inline::Text("縦書き".into())],
+            }),
+            // Characters flow top-to-bottom; this wraps to several
+            // right-to-left columns on the small page.
+            Node::Para(Para {
+                children: vec![Inline::Text(
+                    "これは縦書きの段落です。文字は上から下へ、行は右から左へ流れます。日本語の組版を確認します。".into(),
+                )],
+            }),
+        ],
+    });
+    Ok(DocumentBuilder::new(root)
+        .metadata(Metadata {
+            title: Some("VSD conformance: engine 1.8 vertical writing".into()),
+            ..Default::default()
+        })
+        .build()?)
+}
+
 fn form_doc() -> Result<Document> {
     let root = Node::Doc(Doc {
         lang: "en".into(),
         dir: Direction::Ltr,
+        writing_mode: vsd_core::tree::WritingMode::Horizontal,
         children: vec![
             Node::Heading(Heading {
                 level: 1,
@@ -818,6 +876,7 @@ fn redacted_doc() -> Result<(Document, vsd_core::ObjectId, [u8; 32])> {
     let root = Node::Doc(Doc {
         lang: "en".into(),
         dir: Direction::Ltr,
+        writing_mode: vsd_core::tree::WritingMode::Horizontal,
         children: vec![
             Node::Para(Para {
                 children: vec![Inline::Text("Public preamble.".into())],

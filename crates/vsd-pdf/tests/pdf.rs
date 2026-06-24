@@ -23,6 +23,7 @@ fn sample_document() -> Document {
     let mut builder = DocumentBuilder::new(Node::Doc(Doc {
         lang: "en".into(),
         dir: Direction::Ltr,
+        writing_mode: vsd_core::tree::WritingMode::Horizontal,
         children: vec![],
     }));
     let blob_id = builder.add_object(blob.to_value()).unwrap();
@@ -30,6 +31,7 @@ fn sample_document() -> Document {
     let root = Node::Doc(Doc {
         lang: "en".into(),
         dir: Direction::Ltr,
+        writing_mode: vsd_core::tree::WritingMode::Horizontal,
         children: vec![
             Node::Heading(Heading {
                 level: 1,

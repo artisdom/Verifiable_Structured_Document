@@ -49,6 +49,7 @@ fn build_doc(mut blocks: Vec<Node>, secret_at: usize) -> (Document, Vec<usize>) 
     let doc = DocumentBuilder::new(Node::Doc(Doc {
         lang: "en".into(),
         dir: Direction::Ltr,
+        writing_mode: vsd_core::tree::WritingMode::Horizontal,
         children: blocks,
     }))
     .build()
@@ -66,7 +67,7 @@ proptest! {
     ) {
         let doc = DocumentBuilder::new(Node::Doc(Doc {
             lang: "en".into(),
-            dir: Direction::Ltr,
+            dir: Direction::Ltr, writing_mode: vsd_core::tree::WritingMode::Horizontal,
             children: blocks,
         }))
         .build()

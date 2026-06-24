@@ -232,6 +232,7 @@ impl Compose {
         let root = Node::Doc(Doc {
             lang: self.lang,
             dir: Direction::Ltr,
+            writing_mode: crate::tree::WritingMode::Horizontal,
             children: self.children,
         });
         let mut builder = DocumentBuilder::new(root)

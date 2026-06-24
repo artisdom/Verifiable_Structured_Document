@@ -70,6 +70,7 @@ pub fn document_from_json(json: &Json, base_dir: &Path, profile: Profile) -> Res
     let root = Node::Doc(Doc {
         lang,
         dir,
+        writing_mode: vsd_core::tree::WritingMode::Horizontal,
         children,
     });
 

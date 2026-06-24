@@ -79,6 +79,12 @@ pub enum EngineVersion {
     /// modulo simple kinsoku). Horizontal writing only; no format change.
     /// Everything else identical to 1.6.
     V1_7,
+    /// LAYOUT-1.8.md — **vertical writing mode** (`vertical-rl`): when the
+    /// document's `writing_mode` is vertical, characters stack
+    /// top-to-bottom in a column and columns advance right-to-left
+    /// (CJK vertical typesetting). Horizontal documents are laid out
+    /// exactly as in 1.7. Uses the format-0.5 `wm` doc attribute.
+    V1_8,
 }
 
 impl EngineVersion {
@@ -92,6 +98,7 @@ impl EngineVersion {
             EngineVersion::V1_5 => "1.5.0",
             EngineVersion::V1_6 => "1.6.0",
             EngineVersion::V1_7 => "1.7.0",
+            EngineVersion::V1_8 => "1.8.0",
         }
     }
 
@@ -105,6 +112,7 @@ impl EngineVersion {
             "1.5.0" => Some(EngineVersion::V1_5),
             "1.6.0" => Some(EngineVersion::V1_6),
             "1.7.0" => Some(EngineVersion::V1_7),
+            "1.8.0" => Some(EngineVersion::V1_8),
             _ => None,
         }
     }
@@ -122,7 +130,8 @@ impl EngineVersion {
             EngineVersion::V1_4
             | EngineVersion::V1_5
             | EngineVersion::V1_6
-            | EngineVersion::V1_7 => crate::text::StylePolicy::V1_4,
+            | EngineVersion::V1_7
+            | EngineVersion::V1_8 => crate::text::StylePolicy::V1_4,
         }
     }
 
@@ -146,6 +155,7 @@ impl EngineVersion {
                 | EngineVersion::V1_5
                 | EngineVersion::V1_6
                 | EngineVersion::V1_7
+                | EngineVersion::V1_8
         )
     }
 
@@ -157,6 +167,7 @@ impl EngineVersion {
                 | EngineVersion::V1_5
                 | EngineVersion::V1_6
                 | EngineVersion::V1_7
+                | EngineVersion::V1_8
         )
     }
 
@@ -177,7 +188,7 @@ impl EngineVersion {
             // 1.5 shapes every Brahmic script in the map *except* Thai/Lao
             // (which need dictionary line breaking — added in 1.6).
             EngineVersion::V1_5 => !matches!(f, Face::Thai | Face::Lao),
-            EngineVersion::V1_6 | EngineVersion::V1_7 => true,
+            EngineVersion::V1_6 | EngineVersion::V1_7 | EngineVersion::V1_8 => true,
         };
         shaped.then_some(f)
     }
@@ -187,20 +198,29 @@ impl EngineVersion {
     fn mirror(self) -> bool {
         matches!(
             self,
-            EngineVersion::V1_5 | EngineVersion::V1_6 | EngineVersion::V1_7
+            EngineVersion::V1_5 | EngineVersion::V1_6 | EngineVersion::V1_7 | EngineVersion::V1_8
         )
     }
 
     /// Use dictionary-based line breaking for spaceless scripts
     /// (Thai/Lao, engine 1.6+).
     fn dict_break(self) -> bool {
-        matches!(self, EngineVersion::V1_6 | EngineVersion::V1_7)
+        matches!(
+            self,
+            EngineVersion::V1_6 | EngineVersion::V1_7 | EngineVersion::V1_8
+        )
     }
 
     /// Lay out CJK (Han/kana/Hangul) instead of refusing it, with
-    /// inter-ideograph line breaking (engine 1.7).
+    /// inter-ideograph line breaking (engine 1.7+).
     fn allows_cjk(self) -> bool {
-        matches!(self, EngineVersion::V1_7)
+        matches!(self, EngineVersion::V1_7 | EngineVersion::V1_8)
+    }
+
+    /// Support vertical writing mode (`vertical-rl`, engine 1.8). Earlier
+    /// engines refuse a document whose `writing_mode` is vertical.
+    fn vertical(self) -> bool {
+        matches!(self, EngineVersion::V1_8)
     }
 }
 
@@ -248,7 +268,7 @@ impl Default for LayoutOptions {
         LayoutOptions {
             page_width_um: 210_000,
             page_height_um: 297_000,
-            engine: EngineVersion::V1_7,
+            engine: EngineVersion::V1_8,
         }
     }
 }
@@ -492,6 +512,12 @@ pub(crate) struct Engine<'a> {
     y: i64,
     page_top: bool,
     prev_after: i64,
+    // Vertical writing mode (engine 1.8): the right edge of the current
+    // column, its width, and whether a column has been opened on the
+    // current page. Unused in horizontal mode.
+    vcol_right: i64,
+    vcol_w: i64,
+    vcol_started: bool,
 }
 
 pub fn layout_document(doc: &Document, opts: &LayoutOptions) -> Result<Vec<Page>> {
@@ -571,9 +597,24 @@ pub fn layout_document_with_session(
         y: MARGIN,
         page_top: true,
         prev_after: 0,
+        vcol_right: 0,
+        vcol_w: 0,
+        vcol_started: false,
     };
     let mut path = Vec::new();
-    eng.flow_blocks(&d.children, &mut path)?;
+    match d.writing_mode {
+        vsd_core::tree::WritingMode::Horizontal => {
+            eng.flow_blocks(&d.children, &mut path)?;
+        }
+        vsd_core::tree::WritingMode::VerticalRl => {
+            if !opts.engine.vertical() {
+                return Err(LayoutError::Unsupported(
+                    "writing-mode vertical-rl requires engine 1.8 or later".into(),
+                ));
+            }
+            eng.flow_vertical(&d.children, &mut path)?;
+        }
+    }
     eng.finish();
     Ok(eng.pages)
 }
@@ -640,6 +681,157 @@ impl Engine<'_> {
             path.pop();
         }
         Ok(())
+    }
+
+    // --- Vertical writing mode (LAYOUT-1.8.md) -------------------------------
+
+    fn content_bottom(&self) -> i64 {
+        self.opts.page_height_um - MARGIN
+    }
+
+    fn content_right(&self) -> i64 {
+        self.opts.page_width_um - MARGIN
+    }
+
+    /// Flow blocks in `vertical-rl`: each character is placed top-to-bottom
+    /// in a column, and columns advance right-to-left. Only paragraphs and
+    /// headings (and transparent sections / subtree refs / salt wrappers)
+    /// are supported; other block types are refused rather than
+    /// mis-rendered, as are shaped scripts (which would need vertical
+    /// shaping). Reading order = op order = top-to-bottom, right-to-left.
+    fn flow_vertical(&mut self, blocks: &[Node], path: &mut Vec<u64>) -> Result<()> {
+        for (i, block) in blocks.iter().enumerate() {
+            path.push(i as u64);
+            self.vertical_one(block, path)?;
+            path.pop();
+        }
+        Ok(())
+    }
+
+    fn vertical_one(&mut self, block: &Node, path: &mut Vec<u64>) -> Result<()> {
+        match block {
+            Node::Section(s) => {
+                let children = s.children.clone();
+                self.flow_vertical(&children, path)?;
+            }
+            Node::SubtreeRef(id) => {
+                let sub = Node::from_value(&self.doc.store.get_value(id)?)?;
+                self.vertical_one(&sub, path)?;
+            }
+            // Salt wrappers are invisible to layout and back-references.
+            Node::Salted(s) => self.vertical_one(&s.child, path)?,
+            Node::Para(p) => self.vertical_text_block(&p.children, SIZE_BODY, path)?,
+            Node::Heading(h) => {
+                let size = SIZE_H[(h.level - 1) as usize];
+                self.vertical_text_block(&h.children, size, path)?;
+            }
+            Node::PageBreakHint => {
+                if self.vcol_started {
+                    self.vertical_flush_page();
+                }
+            }
+            _ => return Err(self.vertical_unsupported()),
+        }
+        Ok(())
+    }
+
+    fn vertical_unsupported(&self) -> LayoutError {
+        LayoutError::Unsupported(format!(
+            "engine {} vertical writing mode supports only paragraphs and headings \
+             (and sections); this block type is refused rather than mis-rendered",
+            self.opts.engine.as_str()
+        ))
+    }
+
+    /// Lay one text block into vertical columns. Each character is its own
+    /// positioned text run (logical order = op order), centered in its
+    /// column; the column advances down by one em per character and a new
+    /// column opens to the left when the page bottom is reached.
+    fn vertical_text_block(
+        &mut self,
+        inlines: &[vsd_core::tree::Inline],
+        size: i64,
+        path: &[u64],
+    ) -> Result<()> {
+        let lt = self.styled_text(inlines)?;
+        // Vertical shaping is out of scope: refuse scripts that need a
+        // shaper rather than placing unshaped glyphs.
+        if lt.text.chars().any(|c| Face::shaped_for(c).is_some()) {
+            return Err(LayoutError::Unsupported(
+                "engine 1.8 vertical writing mode does not support shaped scripts \
+                 (Arabic, Indic, Thai/Lao); refusing rather than mis-rendering"
+                    .into(),
+            ));
+        }
+        let col_w = FontMetrics::line_height_um(size);
+        let bottom = self.content_bottom();
+        let mm = |um: i64| um as f64 / 1000.0;
+        let pt = |um: i64| um as f64 * 72.0 / 25400.0;
+        // Each block starts a fresh column; blocks after the first get an
+        // inter-block gap in the (horizontal) block-flow axis.
+        let gap = if self.vcol_started { SPACE_AFTER } else { 0 };
+        self.begin_column(col_w, gap);
+        for (off, c) in lt.text.char_indices() {
+            if c.is_control() {
+                continue;
+            }
+            // New column when the next em crosses the bottom margin, but
+            // always keep at least one character per column.
+            if self.y + size > bottom && self.y > MARGIN {
+                self.begin_column(col_w, 0);
+            }
+            let face = lt.face_for(off, c);
+            let fm = FontMetrics::face_metrics(face);
+            let h_adv = fm.char_advance_um(c, size);
+            let col_left = self.vcol_right - col_w;
+            let x = col_left + (col_w - h_adv) / 2;
+            let baseline = self.y + fm.ascent_um(size);
+            let color = if lt.links.iter().any(|&(s, e)| off >= s && off < e) {
+                LINK_BLUE
+            } else {
+                BLACK
+            };
+            self.cur.push(DisplayOp::TextRun {
+                x: mm(x),
+                y: mm(baseline),
+                font: face.index(),
+                size_pt: pt(size),
+                color,
+                rtl: false,
+                text: c.to_string(),
+                node_path: path.to_vec(),
+                char_range: (off as u64, (off + c.len_utf8()) as u64),
+            });
+            self.y += size; // advance one em down the column
+        }
+        Ok(())
+    }
+
+    /// Open a fresh column of width `col_w`, leaving `gap` of extra space
+    /// to the right of it (inter-block spacing). Advances right-to-left
+    /// and starts a new page when a column would cross the left margin.
+    fn begin_column(&mut self, col_w: i64, gap: i64) {
+        let content_right = self.content_right();
+        if self.vcol_started {
+            let candidate = self.vcol_right - self.vcol_w - gap;
+            if candidate - col_w < MARGIN {
+                self.vertical_flush_page();
+                self.vcol_right = content_right;
+            } else {
+                self.vcol_right = candidate;
+            }
+        } else {
+            self.vcol_right = content_right;
+        }
+        self.vcol_w = col_w;
+        self.y = MARGIN;
+        self.vcol_started = true;
+    }
+
+    fn vertical_flush_page(&mut self) {
+        let ops = std::mem::take(&mut self.cur);
+        self.pages.push(self.make_page(ops));
+        self.vcol_started = false;
     }
 
     /// Fragment a top-level block, consulting the session's fragment

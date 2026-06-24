@@ -43,7 +43,7 @@ four properties that matter and removes the failure modes by construction:
 | [`vsd-core`](crates/vsd-core) | Deterministic CBOR (RFC 8949 §4.2, strict both ways) · content-addressed object store · content tree · manifest & profiles · validation · destructive redaction · forms + fill/flatten · object-set diff · render-layer types. `no_std + alloc` capable. |
 | [`vsd-container`](crates/vsd-container) | The `.vsd` chunk container: 32-byte header, BLAKE3-checksummed chunks, object index, signature blocks, trailer; zstd optional; lazy `StreamReader` for ranged access |
 | [`vsd-sign`](crates/vsd-sign) | Ed25519 signatures over document/subtree Merkle roots, with domain separation (wire format reserves `ecdsa-p256`, `ml-dsa-65`) |
-| [`vsd-layout`](crates/vsd-layout) | The reference layout engine (versions **1.0–1.7**, each an immutable contract): a deterministic projection from content tree to display lists — integer-µm arithmetic, twenty pinned Noto faces (incl. a full pan-CJK CFF face), pinned hyphenation patterns + pinned shaper (rustybuzz) + pinned Unicode mirroring table + pinned ICU Thai/Lao dictionaries, normative contracts in [docs/LAYOUT-1.0.md](docs/LAYOUT-1.0.md)…[1.7.md](docs/LAYOUT-1.7.md) |
+| [`vsd-layout`](crates/vsd-layout) | The reference layout engine (versions **1.0–1.8**, each an immutable contract): a deterministic projection from content tree to display lists — integer-µm arithmetic, twenty pinned Noto faces (incl. a full pan-CJK CFF face), horizontal **and vertical** (`vertical-rl`) writing, pinned hyphenation patterns + pinned shaper (rustybuzz) + pinned Unicode mirroring table + pinned ICU Thai/Lao dictionaries, normative contracts in [docs/LAYOUT-1.0.md](docs/LAYOUT-1.0.md)…[1.8.md](docs/LAYOUT-1.8.md) |
 | [`vsd-render`](crates/vsd-render) | Rasterizer: display-list pages → PNG via tiny-skia, drawing with the same pinned font the engine measured with |
 | [`vsd-pdf`](crates/vsd-pdf) | PDF interop: deterministic **tagged** PDF export with the canonical `.vsd` embedded (hybrid PDF — round trips losslessly, verifiable by document id); import with hybrid recovery + pluggable structure recovery for foreign PDFs |
 | [`vsd-tlog`](crates/vsd-tlog) | Transparency log: RFC 6962-style Merkle tree over document ids — inclusion + consistency proofs, signed tree heads ("this contract existed, in exactly this form, at this time") |
@@ -401,14 +401,24 @@ CLI.
   embeds in PDF via a new `FontFile3`/`CIDFontType0` path; raster draws
   CFF outlines directly. No format change; 1.0–1.6 hashes unchanged.
 
+**Implemented (v0.18 — engine 1.8 vertical writing mode):**
+
+- **Vertical-rl** (contract in [docs/LAYOUT-1.8.md](docs/LAYOUT-1.8.md)):
+  the format-0.5 `wm` doc attribute selects vertical writing; characters
+  stack top-to-bottom and columns advance right-to-left, one positioned
+  run per character so op order is reading order (extraction/search keep
+  working). Horizontal documents are byte-identical to 1.7. Paragraphs +
+  headings are supported; other block types and shaped scripts are
+  refused in vertical mode rather than mis-rendered.
+
 **Not yet implemented (the honest list):**
 
-- Layout engine widening (engine 1.8+): **vertical writing mode**
-  (`vertical-rl`, needs an additive `writing-mode` format change +
-  column geometry), CJK punctuation/fullwidth routing, PDF font
-  subsetting, complex scripts beyond the major Brahmic + Thai/Lao + CJK
-  set, multi-column, MathML layout. The engine refuses what it cannot
-  lay out rather than mis-rendering it.
+- Layout engine widening (engine 1.9+): vertical tables/lists/code &
+  tate-chu-yoko, CJK punctuation/fullwidth face routing, PDF font
+  subsetting (CJK PDFs embed the full 16 MB font), complex scripts beyond
+  the major Brahmic + Thai/Lao + CJK set (Myanmar, Khmer, Tibetan,
+  Ethiopic, …), multi-column, MathML layout. The engine refuses what it
+  cannot lay out rather than mis-rendering it.
 - Python/TypeScript authoring bindings; Pandoc/Typst backends;
   viewer-integrated form filling; a browser text-selection layer.
 - PDF/A-2b export mode; foreign tagged-PDF structure-tree import; richer

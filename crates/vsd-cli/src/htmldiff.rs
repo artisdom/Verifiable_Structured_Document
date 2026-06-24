@@ -165,6 +165,7 @@ pub fn node_plain_text(node: &Node) -> String {
     let empty = vsd_core::document::DocumentBuilder::new(Node::Doc(vsd_core::tree::Doc {
         lang: "und".into(),
         dir: vsd_core::tree::Direction::Ltr,
+        writing_mode: vsd_core::tree::WritingMode::Horizontal,
         children: vec![],
     }))
     .build()

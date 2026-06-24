@@ -1,6 +1,6 @@
 # VSD — Verifiable Structured Document
 
-## Format Specification, version 0.4 (1.0-track draft)
+## Format Specification, version 0.5 (1.0-track draft)
 
 **License:** This specification is published under [CC-BY 4.0](https://creativecommons.org/licenses/by/4.0/).
 The reference implementation is Apache-2.0.
@@ -132,7 +132,7 @@ optional fields are omitted when absent; unknown keys are rejected.
 
 | `t` | Fields | Notes |
 |---|---|---|
-| `doc` | `lang` tstr, `dir` "ltr"/"rtl", `children` [node] | root only |
+| `doc` | `lang` tstr, `dir` "ltr"/"rtl", `wm` "htb"/"vrl" (writing mode, 0.5), `children` [node] | root only |
 | `sec` | `role` tstr, `children` [node] | semantic section |
 | `h` | `level` 1..6, `children` [inline] | heading |
 | `p` | `children` [inline] | paragraph |
@@ -213,13 +213,16 @@ op, no display-list format change), `vsd-layout/1.6.0`
 ([docs/LAYOUT-1.6.md](../docs/LAYOUT-1.6.md), adds Thai + Lao with
 dictionary-based line breaking over pinned ICU word lists, since those
 scripts have no inter-word spaces; reuses the `glyphs` op, no format
-change), and `vsd-layout/1.7.0`
+change), `vsd-layout/1.7.0`
 ([docs/LAYOUT-1.7.md](../docs/LAYOUT-1.7.md), adds CJK — Han, kana,
 Hangul — in horizontal writing, rendered per glyph from a pinned pan-CJK
-CFF face with inter-ideograph line breaking; no format change; vertical
-writing mode is a separate future version). Each engine version is
-frozen: the conformance corpus pins one golden vector per version and a
-conforming reader MUST reproduce all of them.
+CFF face with inter-ideograph line breaking; no format change), and
+`vsd-layout/1.8.0` ([docs/LAYOUT-1.8.md](../docs/LAYOUT-1.8.md), adds
+**vertical writing mode** `vertical-rl` via the format-0.5 `wm` doc
+attribute — characters stack top-to-bottom, columns advance
+right-to-left; horizontal documents are byte-identical to 1.7). Each
+engine version is frozen: the conformance corpus pins one golden vector
+per version and a conforming reader MUST reproduce all of them.
 
 ## 8. (reserved)
 
@@ -359,7 +362,8 @@ newer constructs — by design, never mis-render. History: 0.1 initial;
 0.2 added `salted` (§11.2) and `field-layer` (§9.2),
 `hybrid-ed25519-ml-dsa-65` (§10.2); 0.3 added the `rtl` flag on `text`
 display ops (§7); 0.4 added the `glyphs` display op for pre-shaped
-complex-script runs (§7).
+complex-script runs (§7); 0.5 added the `wm` (writing-mode) key on the
+doc node — `"htb"` (default) or `"vrl"` for vertical text (§5).
 
 ## 16. Registries
 

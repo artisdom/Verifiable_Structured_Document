@@ -19,6 +19,7 @@ fn sample_document() -> Document {
     let mut builder = DocumentBuilder::new(Node::Doc(Doc {
         lang: "en".into(),
         dir: Direction::Ltr,
+        writing_mode: vsd_core::tree::WritingMode::Horizontal,
         children: vec![],
     }));
     let blob_id = builder.add_object(blob.to_value()).unwrap();
@@ -26,6 +27,7 @@ fn sample_document() -> Document {
     let root = Node::Doc(Doc {
         lang: "en".into(),
         dir: Direction::Ltr,
+        writing_mode: vsd_core::tree::WritingMode::Horizontal,
         children: vec![
             Node::Heading(Heading {
                 level: 1,
@@ -256,6 +258,7 @@ fn alt_text_is_a_validity_condition() {
     let mut builder = DocumentBuilder::new(Node::Doc(Doc {
         lang: "en".into(),
         dir: Direction::Ltr,
+        writing_mode: vsd_core::tree::WritingMode::Horizontal,
         children: vec![],
     }));
     let blob_id = builder.add_object(blob.to_value()).unwrap();
@@ -263,6 +266,7 @@ fn alt_text_is_a_validity_condition() {
     let root = Node::Doc(Doc {
         lang: "en".into(),
         dir: Direction::Ltr,
+        writing_mode: vsd_core::tree::WritingMode::Horizontal,
         children: vec![Node::Figure(Figure {
             res: blob_id,
             alt: "".into(), // missing alt, not decorative
@@ -311,6 +315,7 @@ fn forms_profile_and_evaluation() {
     let root = Node::Doc(Doc {
         lang: "en".into(),
         dir: Direction::Ltr,
+        writing_mode: vsd_core::tree::WritingMode::Horizontal,
         children: vec![
             Node::Field(Field {
                 id: "qty".into(),
@@ -370,6 +375,7 @@ fn fill_and_flatten_lifecycle() {
     let root = Node::Doc(Doc {
         lang: "en".into(),
         dir: Direction::Ltr,
+        writing_mode: vsd_core::tree::WritingMode::Horizontal,
         children: vec![
             Node::Para(Para {
                 children: vec![Inline::Text("Order form".into())],
@@ -458,6 +464,7 @@ fn computed_cycle_is_rejected() {
     let doc = DocumentBuilder::new(Node::Doc(Doc {
         lang: "en".into(),
         dir: Direction::Ltr,
+        writing_mode: vsd_core::tree::WritingMode::Horizontal,
         children: vec![mk("a", "b"), mk("b", "a")],
     }))
     .profile(Profile::Form)
@@ -571,6 +578,7 @@ fn lying_render_cache_is_caught_only_by_recompute() {
         let mut builder = DocumentBuilder::new(Node::Doc(Doc {
             lang: "en".into(),
             dir: Direction::Ltr,
+            writing_mode: vsd_core::tree::WritingMode::Horizontal,
             children: vec![Node::Para(Para {
                 children: vec![Inline::Text(
                     "The fee is $800 per month, payable in arrears.".into(),
@@ -624,6 +632,7 @@ fn long_documents_paginate_deterministically() {
     let doc = DocumentBuilder::new(Node::Doc(Doc {
         lang: "en".into(),
         dir: Direction::Ltr,
+        writing_mode: vsd_core::tree::WritingMode::Horizontal,
         children,
     }))
     .build()
@@ -651,6 +660,7 @@ fn rtl_is_refused_by_engine_1_0() {
     let doc = DocumentBuilder::new(Node::Doc(Doc {
         lang: "he".into(),
         dir: Direction::Rtl,
+        writing_mode: vsd_core::tree::WritingMode::Horizontal,
         children: vec![],
     }))
     .build()
@@ -820,6 +830,7 @@ fn styled_document() -> Document {
     let root = Node::Doc(Doc {
         lang: "en".into(),
         dir: Direction::Ltr,
+        writing_mode: vsd_core::tree::WritingMode::Horizontal,
         children: vec![
             Node::Heading(Heading {
                 level: 1,
@@ -919,6 +930,7 @@ fn engine_1_2_widened_typography() {
     let root = Node::Doc(Doc {
         lang: "en".into(),
         dir: Direction::Ltr,
+        writing_mode: vsd_core::tree::WritingMode::Horizontal,
         children: vec![
             Node::Para(Para {
                 children: vec![
@@ -1032,6 +1044,7 @@ fn engine_1_2_justifies_body_paragraphs() {
     let root = Node::Doc(Doc {
         lang: "en".into(),
         dir: Direction::Ltr,
+        writing_mode: vsd_core::tree::WritingMode::Horizontal,
         children: vec![Node::Para(Para {
             children: vec![Inline::Text(words)],
         })],
@@ -1102,6 +1115,7 @@ fn engine_1_2_rtl_documents_right_align() {
     let root = Node::Doc(Doc {
         lang: "he".into(),
         dir: Direction::Rtl,
+        writing_mode: vsd_core::tree::WritingMode::Horizontal,
         children: vec![Node::Para(Para {
             children: vec![Inline::Text("שלום עולם".into())],
         })],
@@ -1153,6 +1167,7 @@ fn engine_1_2_refuses_unsupported_scripts() {
         let root = Node::Doc(Doc {
             lang: "en".into(),
             dir: Direction::Ltr,
+            writing_mode: vsd_core::tree::WritingMode::Horizontal,
             children: vec![Node::Para(Para {
                 children: vec![Inline::Text(format!("mixed {sample} text"))],
             })],
@@ -1200,6 +1215,7 @@ fn incremental_relayout_reuses_fragments_and_matches_from_scratch() {
         DocumentBuilder::new(Node::Doc(Doc {
             lang: "en".into(),
             dir: Direction::Ltr,
+            writing_mode: vsd_core::tree::WritingMode::Horizontal,
             children,
         }))
         .build()
@@ -1287,6 +1303,7 @@ fn engine_1_3_hyphenates_english_body_only() {
         DocumentBuilder::new(Node::Doc(Doc {
             lang: lang.into(),
             dir: Direction::Ltr,
+            writing_mode: vsd_core::tree::WritingMode::Horizontal,
             children: vec![Node::Para(Para {
                 children: vec![Inline::Text(prose.clone())],
             })],
@@ -1396,6 +1413,7 @@ fn engine_1_3_widow_orphan_keeps_two_lines_together() {
     let doc = DocumentBuilder::new(Node::Doc(Doc {
         lang: "fr".into(),
         dir: Direction::Ltr,
+        writing_mode: vsd_core::tree::WritingMode::Horizontal,
         children,
     }))
     .build()
@@ -1469,6 +1487,7 @@ fn engine_1_4_shapes_arabic_and_devanagari() {
     let doc = DocumentBuilder::new(Node::Doc(Doc {
         lang: "en".into(),
         dir: Direction::Ltr,
+        writing_mode: vsd_core::tree::WritingMode::Horizontal,
         children: vec![Node::Para(Para {
             children: vec![Inline::Text(format!(
                 "Arabic {arabic} and Devanagari {deva}."
@@ -1569,6 +1588,7 @@ fn engine_1_4_arabic_rtl_is_visually_ordered() {
     let doc = DocumentBuilder::new(Node::Doc(Doc {
         lang: "ar".into(),
         dir: Direction::Rtl,
+        writing_mode: vsd_core::tree::WritingMode::Horizontal,
         children: vec![Node::Para(Para {
             children: vec![Inline::Text("العربية لغة جميلة".into())],
         })],
@@ -1623,6 +1643,7 @@ fn engine_1_5_shapes_remaining_brahmic_scripts() {
     let doc = DocumentBuilder::new(Node::Doc(Doc {
         lang: "en".into(),
         dir: Direction::Ltr,
+        writing_mode: vsd_core::tree::WritingMode::Horizontal,
         children: vec![Node::Para(Para {
             children: vec![Inline::Text(format!(
                 "Tamil {tamil}, Bengali {bengali}, Telugu {telugu}."
@@ -1701,6 +1722,7 @@ fn engine_1_5_mirrors_brackets_in_rtl() {
     let doc = DocumentBuilder::new(Node::Doc(Doc {
         lang: "he".into(),
         dir: Direction::Rtl,
+        writing_mode: vsd_core::tree::WritingMode::Horizontal,
         children: vec![Node::Para(Para {
             children: vec![Inline::Text("שלום (עולם) ושלום".into())],
         })],
@@ -1779,6 +1801,7 @@ fn engine_1_6_shapes_and_breaks_thai() {
     let doc = DocumentBuilder::new(Node::Doc(Doc {
         lang: "th".into(),
         dir: Direction::Ltr,
+        writing_mode: vsd_core::tree::WritingMode::Horizontal,
         children: vec![Node::Para(Para {
             children: vec![Inline::Text(thai.into())],
         })],
@@ -1853,6 +1876,7 @@ fn engine_1_7_lays_out_and_breaks_cjk() {
     let doc = DocumentBuilder::new(Node::Doc(Doc {
         lang: "zh".into(),
         dir: Direction::Ltr,
+        writing_mode: vsd_core::tree::WritingMode::Horizontal,
         children: vec![
             Node::Para(Para {
                 children: vec![Inline::Text(zh.into())],
@@ -1939,6 +1963,105 @@ fn engine_1_7_lays_out_and_breaks_cjk() {
     // Frozen contract: engine 1.6 refuses CJK (it had no CJK font).
     assert!(matches!(
         vsd_layout::layout_document(&doc, &opts.with_engine(EngineVersion::V1_6)),
+        Err(vsd_layout::LayoutError::Unsupported(_))
+    ));
+}
+
+/// Engine 1.8 lays out a `vertical-rl` document: characters stack
+/// top-to-bottom in a column and columns advance right-to-left. Each
+/// character is its own positioned run; op order is reading order, so the
+/// logical text is preserved. Engine 1.7 refuses vertical-rl.
+#[test]
+fn engine_1_8_vertical_writing_mode() {
+    use vsd_core::layout::DisplayOp;
+    use vsd_core::tree::WritingMode;
+    use vsd_layout::{EngineVersion, LayoutOptions, RecomputeOutcome};
+
+    let ja = "これは縦書きの文章です日本語の組版を確認します";
+    let doc = DocumentBuilder::new(Node::Doc(Doc {
+        lang: "ja".into(),
+        dir: Direction::Ltr,
+        writing_mode: WritingMode::VerticalRl,
+        children: vec![Node::Para(Para {
+            children: vec![Inline::Text(ja.into())],
+        })],
+    }))
+    .build()
+    .unwrap();
+
+    // Small page so the paragraph fills several columns.
+    let opts = LayoutOptions {
+        page_width_um: 80_000,
+        page_height_um: 120_000,
+        engine: EngineVersion::V1_8,
+    };
+    let pages = vsd_layout::layout_document(&doc, &opts).unwrap();
+    assert_eq!(pages.len(), 1);
+
+    // Collect every positioned character run in op (reading) order.
+    let runs: Vec<(f64, f64, String)> = pages[0]
+        .ops
+        .iter()
+        .filter_map(|op| match op {
+            DisplayOp::TextRun { x, y, text, .. } => Some((*x, *y, text.clone())),
+            _ => None,
+        })
+        .collect();
+    assert!(runs.len() >= ja.chars().count(), "one run per character");
+
+    // Logical text is preserved in op order (top-to-bottom, R-to-L).
+    let joined: String = runs.iter().map(|(_, _, t)| t.as_str()).collect();
+    assert_eq!(joined, ja, "vertical op order must equal reading order");
+
+    // Columns advance right-to-left: the run x positions are
+    // non-increasing across the document, and there is more than one
+    // distinct column (so wrapping actually happened).
+    let xs: Vec<f64> = runs.iter().map(|(x, _, _)| *x).collect();
+    assert!(
+        xs.windows(2).all(|w| w[1] <= w[0] + 0.001),
+        "columns must advance right-to-left (x non-increasing)"
+    );
+    let distinct_cols = {
+        let mut v: Vec<i64> = xs.iter().map(|x| (x * 1000.0) as i64).collect();
+        v.dedup();
+        v.len()
+    };
+    assert!(distinct_cols >= 2, "text must wrap to >=2 columns");
+
+    // Within the first column, y increases (top-to-bottom).
+    let first_col_x = xs[0];
+    let first_col_ys: Vec<f64> = runs
+        .iter()
+        .filter(|(x, _, _)| (*x - first_col_x).abs() < 0.001)
+        .map(|(_, y, _)| *y)
+        .collect();
+    assert!(
+        first_col_ys.windows(2).all(|w| w[1] > w[0]),
+        "characters stack top-to-bottom within a column"
+    );
+
+    // Cache pins 1.8.0 and recomputes byte-identically; raster + PDF ok.
+    let laid = vsd_layout::add_render_cache(&doc, &opts).unwrap();
+    let cache = laid.render_cache().unwrap().unwrap();
+    assert_eq!(cache.engine_version, "1.8.0");
+    assert!(matches!(
+        vsd_layout::verify_render_cache(&laid).unwrap(),
+        RecomputeOutcome::Match { .. }
+    ));
+    let page = vsd_core::layout::Page::from_value(&laid.store.get_value(&cache.pages[0]).unwrap())
+        .unwrap();
+    assert!(!vsd_render::render_page_png(&laid, &page, 96.0)
+        .unwrap()
+        .is_empty());
+    assert!(
+        !vsd_pdf::export_pdf(&laid, None, &vsd_pdf::ExportOptions::default())
+            .unwrap()
+            .is_empty()
+    );
+
+    // Frozen contract: engine 1.7 refuses vertical-rl (no vertical mode).
+    assert!(matches!(
+        vsd_layout::layout_document(&doc, &opts.with_engine(EngineVersion::V1_7)),
         Err(vsd_layout::LayoutError::Unsupported(_))
     ));
 }

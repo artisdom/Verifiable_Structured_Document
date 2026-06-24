@@ -337,6 +337,7 @@ impl<'a> Builder<'a> {
         let root = Node::Doc(Doc {
             lang: "en".into(),
             dir: Direction::Ltr,
+            writing_mode: vsd_core::tree::WritingMode::Horizontal,
             children: self.blocks.pop().expect("body"),
         });
         let mut builder = DocumentBuilder::new(root)
