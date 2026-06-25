@@ -206,12 +206,25 @@ impl Compose {
     }
 
     /// A semantic section composed via a nested closure.
-    pub fn section(mut self, role: impl Into<String>, f: impl FnOnce(Compose) -> Compose) -> Self {
+    pub fn section(self, role: impl Into<String>, f: impl FnOnce(Compose) -> Compose) -> Self {
+        self.section_columns(role, 1, f)
+    }
+
+    /// A section whose content flows into `columns` layout columns
+    /// (format 0.6; honored by engine 1.10+). `columns == 1` is a plain
+    /// single-column section.
+    pub fn section_columns(
+        mut self,
+        role: impl Into<String>,
+        columns: u32,
+        f: impl FnOnce(Compose) -> Compose,
+    ) -> Self {
         let inner = f(Compose::new(self.lang.clone()));
         self.resources.extend(inner.resources);
         self.blobs.extend(inner.blobs);
         self.children.push(Node::Section(Section {
             role: role.into(),
+            columns: columns.max(1),
             children: inner.children,
         }));
         self

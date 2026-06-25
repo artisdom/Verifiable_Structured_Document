@@ -84,6 +84,12 @@ pub enum WritingMode {
 pub struct Section {
     /// Semantic role, e.g. "chapter", "appendix", "abstract".
     pub role: String,
+    /// Number of layout columns this section's content flows into
+    /// (format 0.6). `1` is the default single column and is *omitted*
+    /// from the encoding, so every pre-0.6 section is byte-identical.
+    /// Honored by engine 1.10+; earlier engines refuse `columns > 1`
+    /// rather than mis-render. Encoded as the `cols` key.
+    pub columns: u32,
     pub children: Vec<Node>,
 }
 
@@ -346,6 +352,10 @@ impl Node {
             Node::Section(s) => MapBuilder::new()
                 .put("t", Value::text("sec"))
                 .put("role", Value::text(&s.role))
+                .put_opt(
+                    "cols",
+                    (s.columns > 1).then_some(Value::Unsigned(s.columns as u64)),
+                )
                 .put("children", nodes_to_value(&s.children)?)
                 .build(),
             Node::Heading(h) => MapBuilder::new()
@@ -457,9 +467,19 @@ impl Node {
                 }))
             }
             "sec" => {
-                check_keys(v, &["t", "role", "children"], "sec")?;
+                check_keys(v, &["t", "role", "cols", "children"], "sec")?;
+                let columns = match v.get("cols") {
+                    None => 1,
+                    Some(c) => {
+                        let n = c.as_u64().filter(|n| (2..=64).contains(n)).ok_or_else(|| {
+                            Error::Schema("sec: cols must be an integer 2..=64".into())
+                        })?;
+                        n as u32
+                    }
+                };
                 Ok(Node::Section(Section {
                     role: req_text(v, "role", "sec")?,
+                    columns,
                     children: nodes_from_value(req(v, "children", "sec")?, "sec")?,
                 }))
             }

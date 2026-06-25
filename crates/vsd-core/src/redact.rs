@@ -120,6 +120,7 @@ fn replace_at(
             if last {
                 let removed = Node::Section(crate::tree::Section {
                     role: "list-item".into(),
+                    columns: 1,
                     children: core::mem::take(item),
                 });
                 let proof = *blake3::hash(&removed.to_value()?.encode()?).as_bytes();
@@ -148,6 +149,7 @@ fn replace_at(
             if last {
                 let removed = Node::Section(crate::tree::Section {
                     role: "table-cell".into(),
+                    columns: 1,
                     children: core::mem::take(&mut cell.children),
                 });
                 let proof = *blake3::hash(&removed.to_value()?.encode()?).as_bytes();

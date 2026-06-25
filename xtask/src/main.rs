@@ -300,6 +300,27 @@ fn gen_vectors() -> Result<()> {
         "note": "engine 1.9 (LAYOUT-1.9.md): Tibetan (tsheg line breaking), Khmer + Myanmar (dictionary line breaking), Ethiopic, shaped by the pinned rustybuzz; plus CJK punctuation/fullwidth forms set in the pan-CJK face. Routed via the engine-1.9 style policy; no format change",
     }));
 
+    // Engine 1.10: section-level multi-column layout (format-0.6 'cols').
+    let multicol = multicol_doc()?;
+    let opts_110 = vsd_layout::LayoutOptions {
+        page_width_um: 210_000,
+        page_height_um: 100_000, // short page → column + page breaks
+        engine: vsd_layout::EngineVersion::V1_10,
+    };
+    let laid_110 = vsd_layout::add_render_cache(&multicol, &opts_110)?;
+    let laid_110_bytes = write_document(&laid_110, &[], &WriteOptions { compress: false })?;
+    write(&valid.join("laid-out-1.10.vsd"), &laid_110_bytes)?;
+    let cache_110 = laid_110.render_cache()?.expect("cache present");
+    valid_entries.push(json!({
+        "file": "valid/laid-out-1.10.vsd",
+        "doc_id": laid_110.document_id()?.to_hex(),
+        "profile": "core",
+        "layout_engine": "vsd-layout/1.10.0",
+        "layout_hash": hex::encode(cache_110.layout_hash),
+        "layout_pages": cache_110.pages.len(),
+        "note": "engine 1.10 (LAYOUT-1.10.md): section-level multi-column layout via the format-0.6 'cols' attribute — content fills each column top-to-bottom then left-to-right across the page (column-fill: auto); earlier engines refuse cols>1 rather than collapse to one column",
+    }));
+
     let (redacted, predecessor_id, proof) = redacted_doc()?;
     let red_bytes = write_document(&redacted, &[], &WriteOptions { compress: false })?;
     write(&valid.join("redacted.vsd"), &red_bytes)?;
@@ -889,6 +910,44 @@ fn extended_scripts_doc() -> Result<Document> {
         .build()?)
 }
 
+fn multicol_doc() -> Result<Document> {
+    // A full-width heading, then a two-column section whose paragraphs
+    // fill column 0, overflow into column 1, and continue onto a second
+    // page — exercising column and page breaks together.
+    let paras: Vec<Node> = (0..18)
+        .map(|i| {
+            Node::Para(Para {
+                children: vec![Inline::Text(format!(
+                    "Paragraph {i}: text that flows down the current column and then \
+                     into the next column to its right, page after page."
+                ))],
+            })
+        })
+        .collect();
+    let root = Node::Doc(Doc {
+        lang: "en".into(),
+        dir: Direction::Ltr,
+        writing_mode: vsd_core::tree::WritingMode::Horizontal,
+        children: vec![
+            Node::Heading(Heading {
+                level: 1,
+                children: vec![Inline::Text("Two-column article".into())],
+            }),
+            Node::Section(Section {
+                role: "body".into(),
+                columns: 2,
+                children: paras,
+            }),
+        ],
+    });
+    Ok(DocumentBuilder::new(root)
+        .metadata(Metadata {
+            title: Some("VSD conformance: engine 1.10 multi-column layout".into()),
+            ..Default::default()
+        })
+        .build()?)
+}
+
 fn form_doc() -> Result<Document> {
     let root = Node::Doc(Doc {
         lang: "en".into(),
@@ -943,6 +1002,7 @@ fn redacted_doc() -> Result<(Document, vsd_core::ObjectId, [u8; 32])> {
             }),
             Node::Section(Section {
                 role: "secrets".into(),
+                columns: 1,
                 children: vec![
                     Node::Para(Para {
                         children: vec![Inline::Text(

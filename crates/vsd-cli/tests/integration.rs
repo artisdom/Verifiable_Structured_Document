@@ -35,6 +35,7 @@ fn sample_document() -> Document {
             }),
             Node::Section(Section {
                 role: "terms".into(),
+                columns: 1,
                 children: vec![
                     Node::Para(Para {
                         children: vec![Inline::Text(
@@ -2170,4 +2171,125 @@ fn engine_1_9_extended_scripts_and_cjk_punctuation() {
         !any_cjk_punct_18,
         "engine 1.8 must not route CJK punctuation (frozen)"
     );
+}
+
+/// Engine 1.10 flows a section carrying the format-0.6 `cols` attribute
+/// into multiple columns: content fills column 0 top-to-bottom, then
+/// column 1, then a new page. Earlier engines refuse a multi-column
+/// section rather than collapsing it to a single column, and a document
+/// with no multi-column section is byte-identical between 1.9 and 1.10.
+#[test]
+fn engine_1_10_multi_column_layout() {
+    use vsd_core::layout::DisplayOp;
+    use vsd_layout::{EngineVersion, LayoutOptions, RecomputeOutcome};
+
+    // Many short paragraphs so column 0 fills and overflows into column 1
+    // on a deliberately short page.
+    let paras: Vec<Node> = (0..24)
+        .map(|i| {
+            Node::Para(Para {
+                children: vec![Inline::Text(format!(
+                    "Paragraph number {i} in the column flow."
+                ))],
+            })
+        })
+        .collect();
+    let doc = DocumentBuilder::new(Node::Doc(Doc {
+        lang: "en".into(),
+        dir: Direction::Ltr,
+        writing_mode: vsd_core::tree::WritingMode::Horizontal,
+        children: vec![Node::Section(Section {
+            role: "body".into(),
+            columns: 2,
+            children: paras,
+        })],
+    }))
+    .build()
+    .unwrap();
+
+    let opts = LayoutOptions {
+        page_width_um: 210_000,
+        page_height_um: 90_000, // short page → forces column + page breaks
+        engine: EngineVersion::V1_10,
+    };
+    let pages = vsd_layout::layout_document(&doc, &opts).unwrap();
+
+    // Two columns on an A4-wide page: col 0 left edge ≈ 20mm, col 1 left
+    // edge ≈ 20 + 82.5 + 5 = 107.5mm. Both bands must carry text.
+    let xs: Vec<f64> = pages
+        .iter()
+        .flat_map(|p| &p.ops)
+        .filter_map(|op| match op {
+            DisplayOp::TextRun { x, .. } => Some(*x),
+            _ => None,
+        })
+        .collect();
+    let in_col0 = xs.iter().any(|&x| (19.0..21.0).contains(&x));
+    let in_col1 = xs.iter().any(|&x| (106.5..108.5).contains(&x));
+    assert!(in_col0, "left column must carry text (x≈20mm)");
+    assert!(in_col1, "right column must carry text (x≈107.5mm)");
+
+    // Logical text is preserved in reading order across the columns.
+    let joined: String = pages
+        .iter()
+        .flat_map(|p| &p.ops)
+        .filter_map(|op| match op {
+            DisplayOp::TextRun { text, .. } => Some(text.as_str()),
+            _ => None,
+        })
+        .collect();
+    assert!(joined.contains("Paragraph number 0 "));
+    assert!(joined.contains("Paragraph number 23 "));
+
+    // The cache pins 1.10.0 and recomputes byte-identically; raster + PDF
+    // accept the multi-column pages.
+    let laid = vsd_layout::add_render_cache(&doc, &opts).unwrap();
+    let cache = laid.render_cache().unwrap().unwrap();
+    assert_eq!(cache.engine_version, "1.10.0");
+    assert!(matches!(
+        vsd_layout::verify_render_cache(&laid).unwrap(),
+        RecomputeOutcome::Match { .. }
+    ));
+    let page = vsd_core::layout::Page::from_value(&laid.store.get_value(&cache.pages[0]).unwrap())
+        .unwrap();
+    assert!(!vsd_render::render_page_png(&laid, &page, 96.0)
+        .unwrap()
+        .is_empty());
+    assert!(
+        !vsd_pdf::export_pdf(&laid, None, &vsd_pdf::ExportOptions::default())
+            .unwrap()
+            .is_empty()
+    );
+
+    // Frozen contract: engine 1.9 refuses a multi-column section rather
+    // than mis-rendering it as one column.
+    assert!(matches!(
+        vsd_layout::layout_document(&doc, &opts.with_engine(EngineVersion::V1_9)),
+        Err(vsd_layout::LayoutError::Unsupported(_))
+    ));
+
+    // A document with no multi-column section is byte-identical between
+    // 1.9 and 1.10 (multi-column changes flow only when `cols > 1`).
+    let plain = DocumentBuilder::new(Node::Doc(Doc {
+        lang: "en".into(),
+        dir: Direction::Ltr,
+        writing_mode: vsd_core::tree::WritingMode::Horizontal,
+        children: vec![
+            Node::Heading(Heading {
+                level: 1,
+                children: vec![Inline::Text("Plain".into())],
+            }),
+            Node::Para(Para {
+                children: vec![Inline::Text(
+                    "A single-column paragraph of body text.".into(),
+                )],
+            }),
+        ],
+    }))
+    .build()
+    .unwrap();
+    let p_19 = vsd_layout::layout_document(&plain, &opts.with_engine(EngineVersion::V1_9)).unwrap();
+    let p_10 =
+        vsd_layout::layout_document(&plain, &opts.with_engine(EngineVersion::V1_10)).unwrap();
+    assert_eq!(p_19, p_10, "single-column flow unchanged by engine 1.10");
 }

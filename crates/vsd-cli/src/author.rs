@@ -173,6 +173,11 @@ impl AuthorCtx<'_> {
                     .and_then(Json::as_str)
                     .unwrap_or("section")
                     .to_owned(),
+                columns: obj
+                    .get("columns")
+                    .and_then(Json::as_u64)
+                    .map(|n| n as u32)
+                    .unwrap_or(1),
                 children: obj
                     .get("content")
                     .and_then(Json::as_array)

@@ -241,6 +241,7 @@ impl<'a> Builder<'a> {
                 let children = self.blocks.pop().context("quote frame")?;
                 self.push_block(Node::Section(Section {
                     role: "quote".into(),
+                    columns: 1,
                     children,
                 }));
             }

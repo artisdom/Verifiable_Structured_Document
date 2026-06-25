@@ -1,6 +1,6 @@
 # VSD — Verifiable Structured Document
 
-## Format Specification, version 0.5 (1.0-track draft)
+## Format Specification, version 0.6 (1.0-track draft)
 
 **License:** This specification is published under [CC-BY 4.0](https://creativecommons.org/licenses/by/4.0/).
 The reference implementation is Apache-2.0.
@@ -133,7 +133,7 @@ optional fields are omitted when absent; unknown keys are rejected.
 | `t` | Fields | Notes |
 |---|---|---|
 | `doc` | `lang` tstr, `dir` "ltr"/"rtl", `wm` "htb"/"vrl" (writing mode, 0.5), `children` [node] | root only |
-| `sec` | `role` tstr, `children` [node] | semantic section |
+| `sec` | `role` tstr, `cols` uint 2..=64 (layout columns, 0.6; omitted = 1), `children` [node] | semantic section |
 | `h` | `level` 1..6, `children` [inline] | heading |
 | `p` | `children` [inline] | paragraph |
 | `table` | `cols` [{?width: float}], `head`/`body`/`foot` [row] | row = `{cells:[cell]}`; cell = `{?span:[r,c], ?scope:"row"/"col", children:[node]}`; per-row col-span sum must equal the column count; body non-empty |
@@ -223,7 +223,12 @@ right-to-left; horizontal documents are byte-identical to 1.7), and
 `vsd-layout/1.9.0` ([docs/LAYOUT-1.9.md](../docs/LAYOUT-1.9.md), adds the
 remaining complex scripts — Tibetan, Khmer, Myanmar, Ethiopic — and CJK
 punctuation/fullwidth routing, via a version-gated style policy so frozen
-engines are byte-identical; no format change). Each engine version is
+engines are byte-identical; no format change), and `vsd-layout/1.10.0`
+([docs/LAYOUT-1.10.md](../docs/LAYOUT-1.10.md), adds **section-level
+multi-column layout** via the format-0.6 `cols` attribute — content fills
+each column top-to-bottom then left-to-right across the page
+(`column-fill: auto`); single-column documents are byte-identical to 1.9,
+and earlier engines refuse `cols > 1` rather than collapse it). Each engine version is
 frozen: the conformance corpus pins one golden vector per version and a
 conforming reader MUST reproduce all of them.
 
@@ -366,7 +371,9 @@ newer constructs — by design, never mis-render. History: 0.1 initial;
 `hybrid-ed25519-ml-dsa-65` (§10.2); 0.3 added the `rtl` flag on `text`
 display ops (§7); 0.4 added the `glyphs` display op for pre-shaped
 complex-script runs (§7); 0.5 added the `wm` (writing-mode) key on the
-doc node — `"htb"` (default) or `"vrl"` for vertical text (§5).
+doc node — `"htb"` (default) or `"vrl"` for vertical text (§5); 0.6 added
+the `cols` key on the section node for multi-column layout (§5; omitted =
+single column).
 
 ## 16. Registries
 

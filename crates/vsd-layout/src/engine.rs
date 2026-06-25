@@ -9,7 +9,7 @@ use vsd_core::document::Document;
 use vsd_core::forms::FieldValue;
 use vsd_core::layout::{Color, DisplayOp, Page};
 use vsd_core::manifest::Blob;
-use vsd_core::tree::{Node, Row, Table};
+use vsd_core::tree::{Node, Row, Section, Table};
 
 use crate::font::{muldiv, Face, FontMetrics};
 use crate::hyphen::Hyphenator;
@@ -29,6 +29,11 @@ const SPACE_BEFORE_H1: i64 = 6350;
 const LIST_INDENT: i64 = 7_000;
 const LIST_ITEM_GAP: i64 = 1058;
 const CELL_PAD: i64 = 1000;
+/// Gutter between layout columns (engine 1.10, LAYOUT-1.10.md §3).
+const COLUMN_GUTTER: i64 = 5_000;
+/// A multi-column section must give each column at least this width, or
+/// the engine refuses it rather than producing unreadably narrow columns.
+const MIN_COLUMN_WIDTH: i64 = 20_000;
 const RULE: i64 = 100;
 const FIELD_BLANK_W: i64 = 30_000;
 const CAPTION_GAP: i64 = 1058;
@@ -91,6 +96,13 @@ pub enum EngineVersion {
     /// pan-CJK face. Routed via the engine-1.9 style policy so frozen
     /// engines are unaffected. No format change.
     V1_9,
+    /// LAYOUT-1.10.md — **section-level multi-column layout**: a section
+    /// carrying the format-0.6 `cols` attribute flows its content into
+    /// N equal columns (sequential top-to-bottom, left-to-right fill).
+    /// Single-column documents are laid out exactly as in 1.9; earlier
+    /// engines refuse `cols > 1` rather than mis-render. No change to any
+    /// other behavior.
+    V1_10,
 }
 
 impl EngineVersion {
@@ -106,6 +118,7 @@ impl EngineVersion {
             EngineVersion::V1_7 => "1.7.0",
             EngineVersion::V1_8 => "1.8.0",
             EngineVersion::V1_9 => "1.9.0",
+            EngineVersion::V1_10 => "1.10.0",
         }
     }
 
@@ -121,6 +134,7 @@ impl EngineVersion {
             "1.7.0" => Some(EngineVersion::V1_7),
             "1.8.0" => Some(EngineVersion::V1_8),
             "1.9.0" => Some(EngineVersion::V1_9),
+            "1.10.0" => Some(EngineVersion::V1_10),
             _ => None,
         }
     }
@@ -140,8 +154,9 @@ impl EngineVersion {
             | EngineVersion::V1_6
             | EngineVersion::V1_7
             | EngineVersion::V1_8 => crate::text::StylePolicy::V1_4,
-            // 1.9 adds extended-script + CJK-punctuation face routing.
-            EngineVersion::V1_9 => crate::text::StylePolicy::V1_9,
+            // 1.9 adds extended-script + CJK-punctuation face routing;
+            // 1.10 reuses it (multi-column changes flow, not styling).
+            EngineVersion::V1_9 | EngineVersion::V1_10 => crate::text::StylePolicy::V1_9,
         }
     }
 
@@ -191,7 +206,8 @@ impl EngineVersion {
             EngineVersion::V1_6
             | EngineVersion::V1_7
             | EngineVersion::V1_8
-            | EngineVersion::V1_9 => true,
+            | EngineVersion::V1_9
+            | EngineVersion::V1_10 => true,
         };
         shaped.then_some(f)
     }
@@ -228,21 +244,31 @@ impl EngineVersion {
     fn allows_cjk(self) -> bool {
         matches!(
             self,
-            EngineVersion::V1_7 | EngineVersion::V1_8 | EngineVersion::V1_9
+            EngineVersion::V1_7 | EngineVersion::V1_8 | EngineVersion::V1_9 | EngineVersion::V1_10
         )
     }
 
     /// Support vertical writing mode (`vertical-rl`, engine 1.8+). Earlier
     /// engines refuse a document whose `writing_mode` is vertical.
     fn vertical(self) -> bool {
-        matches!(self, EngineVersion::V1_8 | EngineVersion::V1_9)
+        matches!(
+            self,
+            EngineVersion::V1_8 | EngineVersion::V1_9 | EngineVersion::V1_10
+        )
     }
 
     /// Route the engine-1.9 extended complex scripts (Tibetan, Khmer,
     /// Myanmar, Ethiopic) and CJK punctuation to their faces, with
     /// Tibetan tsheg line breaking.
     fn extended(self) -> bool {
-        matches!(self, EngineVersion::V1_9)
+        matches!(self, EngineVersion::V1_9 | EngineVersion::V1_10)
+    }
+
+    /// Flow a section's content into multiple columns when its `cols`
+    /// attribute is > 1 (engine 1.10+). Earlier engines refuse a
+    /// multi-column section rather than mis-render it as a single column.
+    fn columns(self) -> bool {
+        matches!(self, EngineVersion::V1_10)
     }
 }
 
@@ -290,7 +316,7 @@ impl Default for LayoutOptions {
         LayoutOptions {
             page_width_um: 210_000,
             page_height_um: 297_000,
-            engine: EngineVersion::V1_9,
+            engine: EngineVersion::V1_10,
         }
     }
 }
@@ -353,7 +379,16 @@ enum Op {
 }
 
 impl Op {
+    /// Single-column / vertical placement: no horizontal offset.
     fn finalize(self, y_off: i64) -> DisplayOp {
+        self.finalize_xy(0, y_off)
+    }
+
+    /// Place at an absolute (x_off, y_off). For single-column flow
+    /// `x_off` is 0, so `mm(x + 0) == mm(x)` — byte-identical to the
+    /// frozen path. Column flow (engine 1.10) fragments at a
+    /// column-relative x = 0 and supplies the column's left edge here.
+    fn finalize_xy(self, x_off: i64, y_off: i64) -> DisplayOp {
         let mm = |um: i64| um as f64 / 1000.0;
         let pt = |um: i64| um as f64 * 72.0 / 25400.0;
         match self {
@@ -368,7 +403,7 @@ impl Op {
                 path,
                 range,
             } => DisplayOp::TextRun {
-                x: mm(x),
+                x: mm(x + x_off),
                 y: mm(y_off + baseline),
                 font: face.index(),
                 size_pt: pt(size_um),
@@ -389,7 +424,7 @@ impl Op {
                 path,
                 range,
             } => DisplayOp::GlyphRun {
-                x: mm(x),
+                x: mm(x + x_off),
                 y: mm(y_off + baseline),
                 font: face.index(),
                 size_pt: pt(size_um),
@@ -409,14 +444,14 @@ impl Op {
                 char_range: range,
             },
             Op::Rect { x, y, w, h, color } => DisplayOp::Rect {
-                x: mm(x),
+                x: mm(x + x_off),
                 y: mm(y_off + y),
                 w: mm(w),
                 h: mm(h),
                 fill: color,
             },
             Op::Image { x, y, w, h, res } => DisplayOp::Image {
-                x: mm(x),
+                x: mm(x + x_off),
                 y: mm(y_off + y),
                 w: mm(w),
                 h: mm(h),
@@ -483,6 +518,40 @@ impl Frag {
 
     fn total_height(&self) -> i64 {
         self.atoms.iter().map(|a| a.height).sum()
+    }
+}
+
+/// State for flowing one multi-column section (engine 1.10,
+/// LAYOUT-1.10.md). Columns are filled sequentially: top-to-bottom in the
+/// current column, then left-to-right across columns, then top of the
+/// next page (`column-fill: auto` semantics — the last page is not
+/// balanced). Geometry is integer micrometers, like all layout.
+struct ColFlow {
+    /// Number of columns.
+    n: i64,
+    /// Width of each column.
+    col_w: i64,
+    /// Gutter between columns.
+    gutter: i64,
+    /// Current column index, `0..n`.
+    idx: i64,
+    /// Current y within the current column.
+    y: i64,
+    /// Top y of the column band on the current page (the section's start
+    /// position on its first page, the top margin on later pages).
+    band_top: i64,
+    /// Deepest column bottom reached on the current page — where
+    /// full-width flow resumes after the section.
+    page_bottom: i64,
+    /// `space_after` carried from the previously placed block.
+    prev_after: i64,
+    /// Whether any atom has been emitted in this section yet.
+    started: bool,
+}
+
+impl ColFlow {
+    fn col_left(&self) -> i64 {
+        MARGIN + self.idx * (self.col_w + self.gutter)
     }
 }
 
@@ -679,17 +748,16 @@ impl Engine<'_> {
     fn flow_blocks(&mut self, blocks: &[Node], path: &mut Vec<u64>) -> Result<()> {
         for (i, block) in blocks.iter().enumerate() {
             path.push(i as u64);
-            // Sections flow transparently in the page stream (their
-            // children are top-level blocks); everything else fragments.
+            // Single-column sections flow transparently in the page stream
+            // (their children are top-level blocks); a multi-column section
+            // (engine 1.10) flows its children into N columns; everything
+            // else fragments.
             match block {
-                Node::Section(s) => {
-                    let children = s.children.clone();
-                    self.flow_blocks(&children, path)?
-                }
+                Node::Section(s) => self.flow_section(s, path)?,
                 Node::SubtreeRef(id) => {
                     let sub = Node::from_value(&self.doc.store.get_value(id)?)?;
                     if let Node::Section(s) = &sub {
-                        self.flow_blocks(&s.children, path)?;
+                        self.flow_section(s, path)?;
                     } else {
                         let frag = self.fragment_cached(&sub, path)?;
                         self.place(frag);
@@ -703,6 +771,200 @@ impl Engine<'_> {
             path.pop();
         }
         Ok(())
+    }
+
+    /// Flow a section: transparently (single column) or into N columns.
+    /// A multi-column section on an engine older than 1.10 is refused
+    /// rather than silently collapsed to one column.
+    fn flow_section(&mut self, s: &Section, path: &mut Vec<u64>) -> Result<()> {
+        if s.columns > 1 {
+            if !self.opts.engine.columns() {
+                return Err(LayoutError::Unsupported(format!(
+                    "engine {} cannot lay out a {}-column section; multi-column \
+                     requires engine 1.10 or later (refusing rather than \
+                     collapsing to one column)",
+                    self.opts.engine.as_str(),
+                    s.columns
+                )));
+            }
+            let children = s.children.clone();
+            self.flow_columns(&children, s.columns as i64, path)
+        } else {
+            let children = s.children.clone();
+            self.flow_blocks(&children, path)
+        }
+    }
+
+    // --- Multi-column flow (LAYOUT-1.10.md) ----------------------------------
+
+    /// Flow a section's blocks into `n` equal columns. The column band
+    /// begins just below any preceding content (or at the top margin on a
+    /// fresh page) and runs to the bottom margin; when a column fills, the
+    /// next column to the right is used, and when the rightmost column
+    /// fills, a new page begins with the band reset to the top margin.
+    /// After the section, full-width flow resumes below the deepest column
+    /// used on the section's final page.
+    fn flow_columns(&mut self, blocks: &[Node], n: i64, path: &mut Vec<u64>) -> Result<()> {
+        let content_w = self.content_width();
+        let gutter = COLUMN_GUTTER;
+        let col_w = (content_w - (n - 1) * gutter) / n;
+        if col_w < MIN_COLUMN_WIDTH {
+            return Err(LayoutError::Unsupported(format!(
+                "engine {} multi-column: {n} columns leave each column {:.1}mm wide \
+                 (minimum {:.1}mm); refusing rather than mis-rendering",
+                self.opts.engine.as_str(),
+                col_w as f64 / 1000.0,
+                MIN_COLUMN_WIDTH as f64 / 1000.0
+            )));
+        }
+        let gap = if self.page_top { 0 } else { self.prev_after };
+        let band_top = self.y + gap;
+        let mut cf = ColFlow {
+            n,
+            col_w,
+            gutter,
+            idx: 0,
+            y: band_top,
+            band_top,
+            page_bottom: band_top,
+            prev_after: 0,
+            started: false,
+        };
+        self.col_blocks(blocks, path, &mut cf)?;
+        if cf.started {
+            // Resume full-width flow below the deepest column on the final
+            // page (the column ops are still buffered in `self.cur`).
+            self.y = cf.page_bottom;
+            self.page_top = false;
+            self.prev_after = SPACE_AFTER;
+        }
+        Ok(())
+    }
+
+    fn col_blocks(&mut self, blocks: &[Node], path: &mut Vec<u64>, cf: &mut ColFlow) -> Result<()> {
+        for (i, block) in blocks.iter().enumerate() {
+            path.push(i as u64);
+            self.col_one(block, path, cf)?;
+            path.pop();
+        }
+        Ok(())
+    }
+
+    fn col_one(&mut self, block: &Node, path: &mut Vec<u64>, cf: &mut ColFlow) -> Result<()> {
+        match block {
+            Node::Section(s) => {
+                if s.columns > 1 {
+                    return Err(LayoutError::Unsupported(
+                        "engine 1.10 does not support nested multi-column sections; \
+                         refusing rather than mis-rendering"
+                            .into(),
+                    ));
+                }
+                let children = s.children.clone();
+                self.col_blocks(&children, path, cf)?;
+            }
+            Node::SubtreeRef(id) => {
+                let sub = Node::from_value(&self.doc.store.get_value(id)?)?;
+                self.col_one(&sub, path, cf)?;
+            }
+            // Salt wrappers are invisible to layout and back-references.
+            Node::Salted(s) => self.col_one(&s.child, path, cf)?,
+            Node::PageBreakHint => {
+                if cf.started {
+                    self.col_new_page(cf);
+                }
+            }
+            other => {
+                // Fragment at a column-relative origin (x = 0); the
+                // column's left edge is supplied at emission.
+                let frag = self.fragment_at(other, path, 0, cf.col_w)?;
+                self.col_place(frag, cf);
+            }
+        }
+        Ok(())
+    }
+
+    /// Place one fragmented block's atoms into the column flow.
+    fn col_place(&mut self, frag: Frag, cf: &mut ColFlow) {
+        if frag.atoms.is_empty() {
+            return;
+        }
+        let mut gap = if cf.started {
+            cf.prev_after.max(frag.space_before)
+        } else {
+            0
+        };
+        // Heading keep-with-next: the block plus one body line must fit in
+        // the current column, else move to the next column / page.
+        if frag.keep_with_next && cf.started {
+            let need = gap + frag.total_height() + FontMetrics::line_height_um(SIZE_BODY);
+            if cf.y + need > self.limit() && cf.y > cf.band_top {
+                self.col_advance(cf);
+                gap = 0;
+            }
+        }
+        for atom in frag.atoms {
+            self.col_fit(cf, atom.height, &mut gap);
+            cf.y += gap;
+            gap = 0;
+            let x_off = cf.col_left();
+            let y = cf.y;
+            self.cur
+                .extend(atom.ops.into_iter().map(|op| op.finalize_xy(x_off, y)));
+            cf.y += atom.height;
+            cf.started = true;
+            cf.page_bottom = cf.page_bottom.max(cf.y);
+        }
+        cf.prev_after = frag.space_after;
+    }
+
+    /// Ensure `atom_height` (plus the leading `gap`) fits in the current
+    /// column; if not, advance to the next column or page. An atom taller
+    /// than a whole column is placed anyway (it cannot fit anywhere),
+    /// exactly as single-column flow over-runs a too-tall atom.
+    fn col_fit(&mut self, cf: &mut ColFlow, atom_height: i64, gap: &mut i64) {
+        loop {
+            if cf.y + *gap + atom_height <= self.limit() {
+                return;
+            }
+            if cf.y > cf.band_top {
+                // The column has content: move to the next column / page.
+                self.col_advance(cf);
+                *gap = 0;
+            } else if cf.band_top > MARGIN {
+                // An empty column starting below the top margin (the
+                // section began low on the page): pull the whole band to a
+                // fresh page rather than overflowing the bottom margin.
+                self.col_new_page(cf);
+                *gap = 0;
+            } else {
+                // Empty column at the top margin: the atom is taller than a
+                // full column. Place it anyway.
+                return;
+            }
+        }
+    }
+
+    /// Advance to the next column, or to the top of the next page when the
+    /// rightmost column is full.
+    fn col_advance(&mut self, cf: &mut ColFlow) {
+        cf.idx += 1;
+        if cf.idx >= cf.n {
+            self.col_new_page(cf);
+        } else {
+            cf.y = cf.band_top;
+        }
+    }
+
+    /// Flush the current page and reset the column band to the top margin
+    /// of a fresh page.
+    fn col_new_page(&mut self, cf: &mut ColFlow) {
+        let ops = std::mem::take(&mut self.cur);
+        self.pages.push(self.make_page(ops));
+        cf.idx = 0;
+        cf.band_top = MARGIN;
+        cf.y = MARGIN;
+        cf.page_bottom = MARGIN;
     }
 
     // --- Vertical writing mode (LAYOUT-1.8.md) -------------------------------

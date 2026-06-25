@@ -14,9 +14,10 @@ use crate::object::ObjectId;
 /// `salted` node type; minor 3 added the `rtl` flag on display-list
 /// text runs; minor 4 added the `glyphs` display op for pre-shaped
 /// complex-script runs; minor 5 added the `wm` (writing-mode) key on the
-/// doc node for vertical text (additive within major 0; readers gate on
-/// major).
-pub const VSD_VERSION: (u16, u16) = (0, 5);
+/// doc node for vertical text; minor 6 added the `cols` key on the
+/// section node for multi-column layout (additive within major 0;
+/// readers gate on major).
+pub const VSD_VERSION: (u16, u16) = (0, 6);
 
 /// Conformance profile (spec §10).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

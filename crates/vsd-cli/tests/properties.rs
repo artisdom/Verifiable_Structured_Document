@@ -33,8 +33,13 @@ fn arb_block() -> impl Strategy<Value = Node> {
             ordered,
             items: items.into_iter().map(|p| vec![p]).collect(),
         })),
-        ("[a-z]{1,12}", pvec(arb_para(), 1..4))
-            .prop_map(|(role, children)| { Node::Section(Section { role, children }) }),
+        ("[a-z]{1,12}", pvec(arb_para(), 1..4)).prop_map(|(role, children)| {
+            Node::Section(Section {
+                role,
+                columns: 1,
+                children,
+            })
+        }),
     ]
 }
 
