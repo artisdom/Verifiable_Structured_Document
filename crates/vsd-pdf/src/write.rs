@@ -55,8 +55,11 @@ impl PdfWriter {
         self.set(id, body);
     }
 
-    /// Serialize: header, bodies in order, xref, trailer.
-    pub fn finish(self, root: ObjId, info: Option<ObjId>) -> Vec<u8> {
+    /// Serialize: header, bodies in order, xref, trailer. Writes a
+    /// trailer `/ID` (required by PDF/A) when `id` is given; the same 16
+    /// bytes fill both array entries (a freshly created file: permanent
+    /// id == changing id).
+    pub fn finish_with(self, root: ObjId, info: Option<ObjId>, id: Option<[u8; 16]>) -> Vec<u8> {
         let mut out = Vec::new();
         out.extend_from_slice(b"%PDF-1.7\n%\xc2\xb5\xc2\xb6\n");
 
@@ -82,6 +85,10 @@ impl PdfWriter {
         );
         if let Some(info) = info {
             trailer.push_str(&format!(" /Info {}", info.r()));
+        }
+        if let Some(id) = id {
+            let hex: String = id.iter().map(|b| format!("{b:02x}")).collect();
+            trailer.push_str(&format!(" /ID [<{hex}> <{hex}>]"));
         }
         trailer.push_str(&format!(" >>\nstartxref\n{xref_pos}\n%%EOF\n"));
         out.extend_from_slice(trailer.as_bytes());
@@ -145,7 +152,7 @@ mod tests {
             format!("<< /Type /Pages /Kids [{}] /Count 1 >>", page.r()),
         );
         let root = w.add(format!("<< /Type /Catalog /Pages {} >>", pages.r()));
-        let bytes = w.finish(root, None);
+        let bytes = w.finish_with(root, None, None);
         assert!(bytes.starts_with(b"%PDF-1.7"));
         assert!(bytes.ends_with(b"%%EOF\n"));
         let text = String::from_utf8_lossy(&bytes);

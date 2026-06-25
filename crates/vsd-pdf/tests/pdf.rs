@@ -85,6 +85,7 @@ fn export_is_valid_tagged_pdf() {
         None,
         &ExportOptions {
             embed_source: false,
+            ..Default::default()
         },
     )
     .unwrap();
@@ -147,6 +148,7 @@ fn export_is_deterministic() {
     let doc = sample_document();
     let opts = ExportOptions {
         embed_source: false,
+        ..Default::default()
     };
     assert_eq!(
         export_pdf(&doc, None, &opts).unwrap(),
@@ -260,6 +262,73 @@ fn simple_foreign_pdf(text: &str) -> Vec<u8> {
     out
 }
 
+/// PDF/A export: with the embedded source it targets PDF/A-3b (which
+/// permits the attachment), carrying the XMP `pdfaid` identification, an
+/// sRGB OutputIntent, a trailer `/ID`, and subset-tagged fonts with a
+/// `/CIDSet`. Without the source it is PDF/A-2b.
+#[test]
+fn pdfa_export_has_archival_scaffolding() {
+    let doc = sample_document();
+    let vsd = write_document(&doc, &[], &WriteOptions::default()).unwrap();
+
+    // PDF/A-3b (source embedded).
+    let pdf = export_pdf(
+        &doc,
+        Some(&vsd),
+        &ExportOptions {
+            embed_source: true,
+            pdfa: true,
+        },
+    )
+    .unwrap();
+    let parsed = lopdf::Document::load_mem(&pdf).unwrap();
+    let catalog = parsed.catalog().unwrap();
+    assert!(catalog.has(b"Metadata"), "XMP metadata stream");
+    assert!(catalog.has(b"OutputIntents"), "OutputIntent present");
+    assert!(catalog.has(b"AF"), "associated file (PDF/A-3)");
+
+    let text = String::from_utf8_lossy(&pdf);
+    assert!(text.contains("/ID [<"), "trailer /ID required by PDF/A");
+    assert!(
+        text.contains("pdfaid:part>3"),
+        "PDF/A part 3 with attachment"
+    );
+    assert!(text.contains("pdfaid:conformance>B"));
+    assert!(text.contains("/GTS_PDFA1"), "OutputIntent subtype");
+    assert!(text.contains("/DestOutputProfile"), "embedded ICC profile");
+    assert!(text.contains("/CIDSet"), "CIDFont subset CIDSet");
+    // Subset-tagged font name: six uppercase letters + '+'.
+    let tagged = pdf
+        .windows(7)
+        .any(|w| w[..6].iter().all(|b| b.is_ascii_uppercase()) && w[6] == b'+');
+    assert!(tagged, "subset tag prefix on the embedded font");
+    assert!(
+        text.contains("<pdf:Producer>vsd-pdf"),
+        "XMP/Info consistency"
+    );
+
+    // Still a hybrid PDF: the round trip back is lossless.
+    let ImportOutcome::Lossless { document, .. } = import_pdf(&pdf, &TextRecovery).unwrap() else {
+        panic!("PDF/A-3b must still carry its embedded source");
+    };
+    assert_eq!(document.root_node().unwrap(), doc.root_node().unwrap());
+
+    // Without the embedded source → PDF/A-2b, and deterministic.
+    let opts2 = ExportOptions {
+        embed_source: false,
+        pdfa: true,
+    };
+    let a = export_pdf(&doc, None, &opts2).unwrap();
+    let b = export_pdf(&doc, None, &opts2).unwrap();
+    assert_eq!(a, b, "PDF/A export is deterministic");
+    let atext = String::from_utf8_lossy(&a);
+    assert!(atext.contains("pdfaid:part>2"), "part 2 without attachment");
+    assert!(
+        !atext.contains("/AF ["),
+        "no associated file without source"
+    );
+}
+
 /// A *foreign tagged* PDF made by our own exporter with the embedded
 /// source switched off: its StructTreeRoot must drive recovery (path 2),
 /// reconstructing headings (with levels) and paragraphs from the marked
@@ -297,6 +366,7 @@ fn foreign_tagged_pdf_recovers_structure() {
         None,
         &ExportOptions {
             embed_source: false,
+            ..Default::default()
         },
     )
     .unwrap();

@@ -256,7 +256,11 @@ CLI.
   (H1–H6/P/Code/Caption, figure alt text), embedded CID font with
   ToUnicode, PNG/JPEG images, document id in PDF metadata. Visually
   lossless by construction: display lists are a strict subset of PDF's
-  imaging model.
+  imaging model. **`--pdfa`** emits an archival PDF/A file: XMP `pdfaid`
+  identification, an sRGB OutputIntent (pinned ICC), a trailer `/ID`, and
+  subset-tagged fonts with `/CIDSet` — **PDF/A-3b** with the embedded
+  `.vsd` (the ZUGFeRD pattern, so the verifiable round-trip survives
+  archival conformance) or PDF/A-2b without it.
 - **Hybrid PDFs**: the canonical `.vsd` (signatures included) travels
   inside the exported PDF as an attachment, so `vsd import` recovers the
   exact original — same document id, signatures still verify. PDF becomes
@@ -475,10 +479,11 @@ CLI.
   mis-rendering it.
 - Python/TypeScript authoring bindings; Pandoc/Typst backends;
   viewer-integrated form filling; a browser text-selection layer.
-- PDF/A-2b export mode; richer recovery strategies for *untagged* PDFs
-  (column/table reconstruction from text geometry); JPEG→JXL
-  recompression (blocked on a pure-Rust JXL encoder). (Foreign *tagged*
-  PDF structure-tree import shipped in v0.23.)
+- Richer recovery strategies for *untagged* PDFs (column/table
+  reconstruction from text geometry); JPEG→JXL recompression (blocked on
+  a pure-Rust JXL encoder); a veraPDF golden-validation CI job for the
+  `--pdfa` output. (Foreign *tagged* PDF import shipped in v0.23; PDF/A
+  export in v0.24.)
 - X.509 chain-path validation, revocation, RFC 3161 timestamps; C2PA
   JUMBF serialization.
 - External-by-nature: a second independent implementation, the standards

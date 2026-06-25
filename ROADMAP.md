@@ -385,8 +385,16 @@ be able to adopt VSD internally with **zero external-compatibility risk**.
       **Plus the hybrid trick**: by default the canonical `.vsd` travels
       inside the PDF as an attachment, making PDF a *transport* for VSD —
       the round trip back is the identity function, signatures included,
-      verifiable by document id (tested). ☐ PDF/A-2b output mode (XMP +
-      OutputIntent ICC) remains open.
+      verifiable by document id (tested). **PDF/A output mode shipped in
+      v0.24** (`vsd export --pdfa`): XMP metadata with the `pdfaid`
+      identification, an sRGB **OutputIntent** (pinned compact sRGB ICC,
+      public-domain), a trailer `/ID`, and subset-tagged embedded fonts
+      with `/CIDSet`. With the embedded `.vsd` it targets **PDF/A-3b**
+      (which permits the attachment — the ZUGFeRD pattern, so the
+      verifiable hybrid round-trip survives *under archival
+      conformance*); without it, **PDF/A-2b**. Structurally complete and
+      deterministic; full conformance should be confirmed with veraPDF
+      (a validator job is not yet wired into CI).
 - [x] **3c. Pluggable structure recovery** for foreign PDFs: the
       `StructureRecovery` trait keeps recovery strategies out of the
       trusted core; the built-in `TextRecovery` is deliberately naive
@@ -694,6 +702,7 @@ core spec before a working prototype and an adversarial review.
 | **0.21** ✅ | Engine 1.10 multi-column | Section-level multi-column layout via the additive format-0.6 `cols` attribute; sequential top-to-bottom, left-to-right column fill (`column-fill: auto`); single-column documents byte-identical to 1.9 (1.0–1.9 golden hashes unchanged); earlier engines refuse `cols > 1` |
 | **0.22** ✅ | Engine 1.11 MathML | MathML Core (subset) layout with the pinned STIX Two Math face + OpenType MATH table (super/subscripts, fractions, radicals, under/over, fences); unsupported MathML uses the fallback image or is refused; no format change (1.0–1.10 byte-identical). **Phase 2 complete** |
 | **0.23** ✅ | Foreign tagged-PDF import | `vsd-pdf` walks a foreign PDF's `StructTreeRoot` into a semantic content tree (headings/levels, paragraphs, lists, tables with header scope, sections, code), resolving per-element text from marked content (MCID → text decoded via each font's encoding); still marked `format-migrated`, original attached. Closes ROADMAP 3b |
+| **0.24** ✅ | PDF/A export | `vsd export --pdfa`: archival PDF/A-3b (with the embedded `.vsd`, à la ZUGFeRD) or PDF/A-2b — XMP `pdfaid`, sRGB OutputIntent (pinned ICC), trailer `/ID`, subset-tagged fonts with `/CIDSet`; deterministic. Closes 3a's PDF/A tail |
 | **1.0** | Freeze | Spec 1.0, two implementations, audit complete, ISO/W3C track |
 
 *Versioning policy:* the format major version and the crate versions decouple

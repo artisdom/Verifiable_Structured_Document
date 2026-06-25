@@ -31,16 +31,32 @@ use crate::{PdfError, Result};
 
 const PT_PER_MM: f64 = 72.0 / 25.4;
 
+/// Pinned sRGB ICC profile (saucecontrol Compact-ICC-Profiles
+/// `sRGB-v2-micro.icc`, public domain / CC0; SHA-256
+/// `0a8a33aea66a6f154a5642ebe168ef287e73265d9f7b51c42a45e6eedbacda7a`),
+/// embedded as the PDF/A OutputIntent destination profile so DeviceRGB
+/// colors are device-independent.
+static SRGB_ICC: &[u8] = include_bytes!("../assets/sRGB-v2-micro.icc");
+
 #[derive(Clone, Debug)]
 pub struct ExportOptions {
     /// Embed the canonical `.vsd` bytes as a PDF attachment, enabling
     /// verifiable lossless round-trips. On by default.
     pub embed_source: bool,
+    /// Emit an archival **PDF/A** file: XMP metadata with the `pdfaid`
+    /// identification, an sRGB OutputIntent, a trailer `/ID`, and
+    /// subset-tagged embedded fonts with `/CIDSet`. With an embedded
+    /// source this targets **PDF/A-3b** (which permits the attachment,
+    /// like ZUGFeRD); without one, **PDF/A-2b**.
+    pub pdfa: bool,
 }
 
 impl Default for ExportOptions {
     fn default() -> Self {
-        ExportOptions { embed_source: true }
+        ExportOptions {
+            embed_source: true,
+            pdfa: false,
+        }
     }
 }
 
@@ -105,7 +121,7 @@ pub fn export_pdf(
     // --- Font objects (one embedded CID font per used face) ----------------
     let mut font_refs: BTreeMap<Face, ObjId> = BTreeMap::new();
     for (face, gids) in &used {
-        font_refs.insert(*face, embed_font(&mut w, *face, gids));
+        font_refs.insert(*face, embed_font(&mut w, *face, gids, opts.pdfa));
     }
     let mut font_resources = String::new();
     for (face, obj) in &font_refs {
@@ -190,18 +206,59 @@ pub fn export_pdf(
         }
     }
 
+    let meta = doc.metadata()?;
+    let doc_id = doc.document_id()?;
+    let producer = format!("vsd-pdf {}", env!("CARGO_PKG_VERSION"));
+
+    // --- PDF/A scaffolding (XMP metadata + sRGB OutputIntent) ----------------
+    let mut pdfa_entries = String::new();
+    if opts.pdfa {
+        // PDF/A-3 permits the embedded .vsd attachment (PDF/A-2 does not);
+        // without an attachment we are plain PDF/A-2.
+        let part = if opts.embed_source && source_bytes.is_some() {
+            3
+        } else {
+            2
+        };
+        let xmp = build_xmp(
+            part,
+            meta.title.as_deref(),
+            &meta.authors,
+            &producer,
+            &doc_id,
+        );
+        // PDF/A requires the metadata stream to be plaintext (no filter).
+        let meta_obj = w.stream("/Type /Metadata /Subtype /XML", xmp.as_bytes());
+
+        let icc = w.stream(
+            &format!("/N 3 /Filter /FlateDecode /Length1 {}", SRGB_ICC.len()),
+            &flate(SRGB_ICC),
+        );
+        let oi = w.add(format!(
+            "<< /Type /OutputIntent /S /GTS_PDFA1 \
+             /OutputConditionIdentifier (sRGB IEC61966-2.1) /Info (sRGB IEC61966-2.1) \
+             /DestOutputProfile {} >>",
+            icc.r()
+        ));
+        let _ = write!(
+            pdfa_entries,
+            "/Metadata {} /OutputIntents [{}] ",
+            meta_obj.r(),
+            oi.r()
+        );
+    }
+
     // --- Catalog & info ------------------------------------------------------
     let catalog = w.add(format!(
         "<< /Type /Catalog /Pages {} /MarkInfo << /Marked true >> /StructTreeRoot {} \
-         /ViewerPreferences << /DisplayDocTitle true >> /Lang (en) {}{}>>",
+         /ViewerPreferences << /DisplayDocTitle true >> /Lang (en) {}{}{}>>",
         pages_obj.r(),
         struct_root.r(),
+        pdfa_entries,
         names_entry,
         af_entry,
     ));
 
-    let meta = doc.metadata()?;
-    let doc_id = doc.document_id()?;
     let mut info = String::from("<< ");
     if let Some(title) = &meta.title {
         let _ = write!(info, "/Title {} ", pdf_string(title));
@@ -211,13 +268,87 @@ pub fn export_pdf(
     }
     let _ = write!(
         info,
-        "/Producer (vsd-pdf {}) /Keywords (vsd-doc-id:{}) >>",
-        env!("CARGO_PKG_VERSION"),
+        "/Producer ({producer}) /Keywords (vsd-doc-id:{}) >>",
         doc_id.to_hex()
     );
     let info_obj = w.add(info);
 
-    Ok(w.finish(catalog, Some(info_obj)))
+    // PDF/A mandates a trailer /ID; derive it deterministically from the
+    // document id (no clock, no randomness — same document, same bytes).
+    let id = opts.pdfa.then(|| {
+        let mut id = [0u8; 16];
+        id.copy_from_slice(&doc_id.as_slice()[..16]);
+        id
+    });
+    Ok(w.finish_with(catalog, Some(info_obj), id))
+}
+
+/// Build the XMP metadata packet for PDF/A (`part` = 2 or 3, conformance
+/// level B). Properties that also live in the Info dict (title, author,
+/// producer) are mirrored verbatim so a validator sees them consistent.
+fn build_xmp(
+    part: u8,
+    title: Option<&str>,
+    authors: &[String],
+    producer: &str,
+    doc_id: &VsdId,
+) -> String {
+    let hex = doc_id.to_hex();
+    let uuid = format!(
+        "{}-{}-{}-{}-{}",
+        &hex[0..8],
+        &hex[8..12],
+        &hex[12..16],
+        &hex[16..20],
+        &hex[20..32]
+    );
+    let mut dc = String::new();
+    if let Some(t) = title {
+        let _ = write!(
+            dc,
+            "<dc:title><rdf:Alt><rdf:li xml:lang=\"x-default\">{}</rdf:li></rdf:Alt></dc:title>",
+            xml_escape(t)
+        );
+    }
+    if !authors.is_empty() {
+        dc.push_str("<dc:creator><rdf:Seq>");
+        for a in authors {
+            let _ = write!(dc, "<rdf:li>{}</rdf:li>", xml_escape(a));
+        }
+        dc.push_str("</rdf:Seq></dc:creator>");
+    }
+    format!(
+        "<?xpacket begin=\"\u{feff}\" id=\"W5M0MpCehiHzreSzNTczkc9d\"?>\n\
+         <x:xmpmeta xmlns:x=\"adobe:ns:meta/\">\n\
+         <rdf:RDF xmlns:rdf=\"http://www.w3.org/1999/02/22-rdf-syntax-ns#\">\n\
+         <rdf:Description rdf:about=\"\" xmlns:pdfaid=\"http://www.aiim.org/pdfa/ns/id/\">\
+         <pdfaid:part>{part}</pdfaid:part><pdfaid:conformance>B</pdfaid:conformance></rdf:Description>\n\
+         <rdf:Description rdf:about=\"\" xmlns:dc=\"http://purl.org/dc/elements/1.1/\">{dc}</rdf:Description>\n\
+         <rdf:Description rdf:about=\"\" xmlns:pdf=\"http://ns.adobe.com/pdf/1.3/\">\
+         <pdf:Producer>{producer}</pdf:Producer></rdf:Description>\n\
+         <rdf:Description rdf:about=\"\" xmlns:xmp=\"http://ns.adobe.com/xap/1.0/\">\
+         <xmp:CreatorTool>{producer}</xmp:CreatorTool></rdf:Description>\n\
+         <rdf:Description rdf:about=\"\" xmlns:xmpMM=\"http://ns.adobe.com/xap/1.0/mm/\">\
+         <xmpMM:DocumentID>uuid:{uuid}</xmpMM:DocumentID>\
+         <xmpMM:InstanceID>uuid:{uuid}</xmpMM:InstanceID></rdf:Description>\n\
+         </rdf:RDF>\n</x:xmpmeta>\n<?xpacket end=\"w\"?>",
+        producer = xml_escape(producer),
+    )
+}
+
+fn xml_escape(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for c in s.chars() {
+        match c {
+            '&' => out.push_str("&amp;"),
+            '<' => out.push_str("&lt;"),
+            '>' => out.push_str("&gt;"),
+            '"' => out.push_str("&quot;"),
+            '\'' => out.push_str("&apos;"),
+            c => out.push(c),
+        }
+    }
+    out
 }
 
 // --- Content stream -----------------------------------------------------------
@@ -571,16 +702,25 @@ fn build_struct_tree(
 
 // --- Font embedding ---------------------------------------------------------------
 
-fn embed_font(w: &mut PdfWriter, typeface: Face, gids: &BTreeMap<u16, char>) -> ObjId {
+fn embed_font(w: &mut PdfWriter, typeface: Face, gids: &BTreeMap<u16, char>, pdfa: bool) -> ObjId {
     let metrics = FontMetrics::face_metrics(typeface);
     let face = metrics.face();
-    let font_name = typeface.name();
 
     // Embed only the used glyphs: a glyph-id-stable subset (unused
     // outlines emptied). Deterministic and self-verified — falls back to
     // the full font if subsetting can't be proven correct (see `subset`).
     let used: BTreeSet<u16> = gids.keys().copied().collect();
     let font_bytes = crate::subset::subset_face(typeface.bytes(), &used);
+
+    // PDF/A wants a subset font to carry a 6-uppercase-letter "+" tag on
+    // its name. Derive it deterministically from the subset glyph set so
+    // identical subsets get identical tags (and the export stays
+    // byte-stable). Plain (non-PDF/A) export keeps the bare face name.
+    let font_name = if pdfa {
+        format!("{}+{}", subset_tag(typeface, &used), typeface.name())
+    } else {
+        typeface.name().to_owned()
+    };
 
     // The pinned CJK face is a CFF/OpenType font (CID-keyed,
     // Adobe-Identity-0 ROS → CID == GID), so it embeds as FontFile3
@@ -616,10 +756,24 @@ fn embed_font(w: &mut PdfWriter, typeface: Face, gids: &BTreeMap<u16, char>) -> 
     } else {
         32
     };
+    // PDF/A requires a /CIDSet for an embedded CIDFont subset: a bit
+    // string with bit i (MSB-first) set when CID i is present. CID == GID
+    // for every pinned face, so the set is exactly the used glyph ids.
+    let mut cid_set_entry = String::new();
+    if pdfa {
+        let max_gid = used.iter().copied().max().unwrap_or(0) as usize;
+        let mut bits = vec![0u8; max_gid / 8 + 1];
+        for &g in &used {
+            bits[g as usize / 8] |= 0x80 >> (g as usize % 8);
+        }
+        let cid_set = w.stream("/Filter /FlateDecode", &flate(&bits));
+        cid_set_entry = format!(" /CIDSet {}", cid_set.r());
+    }
+
     let descriptor = w.add(format!(
         "<< /Type /FontDescriptor /FontName /{font_name} /Flags {} \
          /FontBBox [{} {} {} {}] /ItalicAngle {} /Ascent {} /Descent {} \
-         /CapHeight {} /StemV {} {} >>",
+         /CapHeight {} /StemV {} {}{} >>",
         flags,
         bbox.x_min,
         bbox.y_min,
@@ -635,6 +789,7 @@ fn embed_font(w: &mut PdfWriter, typeface: Face, gids: &BTreeMap<u16, char>) -> 
             80
         },
         font_file_entry,
+        cid_set_entry,
     ));
 
     // Widths for used glyphs (all pinned faces use upem = 1000 = PDF
@@ -691,6 +846,21 @@ fn embed_font(w: &mut PdfWriter, typeface: Face, gids: &BTreeMap<u16, char>) -> 
 
 fn ttf_gid(gid: u16) -> vsd_layout::font::GlyphId {
     vsd_layout::font::GlyphId(gid)
+}
+
+/// A deterministic 6-uppercase-letter subset tag (PDF §9.6.4): derived
+/// from the face and its used glyph set, so identical subsets tag
+/// identically and the export stays byte-stable.
+fn subset_tag(face: Face, used: &BTreeSet<u16>) -> String {
+    let mut data = vec![face.index() as u8];
+    for &g in used {
+        data.extend_from_slice(&g.to_le_bytes());
+    }
+    let id = VsdId::of_bytes(&data);
+    id.as_slice()[..6]
+        .iter()
+        .map(|b| (b'A' + (b % 26)) as char)
+        .collect()
 }
 
 // --- Images ------------------------------------------------------------------------

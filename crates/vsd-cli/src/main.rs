@@ -171,6 +171,11 @@ enum Command {
         /// Do not embed the source .vsd in the PDF.
         #[arg(long)]
         no_embed_source: bool,
+        /// Emit an archival PDF/A file (PDF/A-3b with the embedded
+        /// source, PDF/A-2b without): XMP + sRGB OutputIntent, /ID,
+        /// subset-tagged fonts with /CIDSet.
+        #[arg(long)]
+        pdfa: bool,
     },
     /// Import a PDF: lossless if it is a hybrid PDF carrying its VSD
     /// source; otherwise heuristic structure recovery (marked lossy in
@@ -336,7 +341,8 @@ fn run() -> Result<()> {
             file,
             output,
             no_embed_source,
-        } => export(&file, &output, no_embed_source),
+            pdfa,
+        } => export(&file, &output, no_embed_source, pdfa),
         Command::Import { file, output } => import(&file, &output),
         Command::Migrate {
             input_dir,
@@ -1025,19 +1031,30 @@ fn flatten(file: &Path, output: &Path) -> Result<()> {
     Ok(())
 }
 
-fn export(file: &Path, output: &Path, no_embed_source: bool) -> Result<()> {
+fn export(file: &Path, output: &Path, no_embed_source: bool, pdfa: bool) -> Result<()> {
     let bytes = std::fs::read(file).with_context(|| format!("reading {}", file.display()))?;
     let vsd = vsd_container::read_document(&bytes, &ReadOptions::default())?;
     let opts = vsd_pdf::ExportOptions {
         embed_source: !no_embed_source,
+        pdfa,
     };
     let pdf = vsd_pdf::export_pdf(&vsd.document, Some(&bytes), &opts)?;
     std::fs::write(output, &pdf)?;
+    let kind = if pdfa {
+        if opts.embed_source {
+            "PDF/A-3b"
+        } else {
+            "PDF/A-2b"
+        }
+    } else {
+        "tagged PDF"
+    };
     println!(
-        "exported {} → {} ({} bytes, tagged PDF{})",
+        "exported {} → {} ({} bytes, {}{})",
         file.display(),
         output.display(),
         pdf.len(),
+        kind,
         if opts.embed_source {
             ", canonical .vsd embedded — round trip is lossless"
         } else {
