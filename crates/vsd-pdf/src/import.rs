@@ -16,13 +16,18 @@
 //!    (see [`crate::tagged`]). Still lossy (structure + text, not exact
 //!    layout) and marked as such.
 //!
-//! 3. **Text recovery (lossy, honest about it).** Untagged foreign PDFs
-//!    go through a [`StructureRecovery`] strategy. The built-in
-//!    [`TextRecovery`] extracts page text and rebuilds paragraphs —
-//!    deliberately naive; richer recoverers (document-understanding
-//!    models) plug in via the trait without entering the trusted core.
+//! 3. **Geometry recovery (untagged foreign PDFs).** With no structure
+//!    tree, positioned text is clustered by layout into headings,
+//!    paragraphs, and columns (see [`crate::geometry`]) — heuristic but
+//!    better than naive line-grouping.
 //!
-//! Both recovery paths mark the result `format-migrated { lossy: true }`
+//! 4. **Text recovery (final fallback).** If geometry finds no text, a
+//!    [`StructureRecovery`] strategy runs. The built-in [`TextRecovery`]
+//!    extracts page text and rebuilds paragraphs — deliberately naive;
+//!    richer recoverers (document-understanding models) plug in via the
+//!    trait without entering the trusted core.
+//!
+//! All recovery paths mark the result `format-migrated { lossy: true }`
 //! in its provenance chain, with the original PDF riding along as an
 //! attachment resource for legal continuity.
 
@@ -135,7 +140,20 @@ pub fn import_pdf(bytes: &[u8], recovery: &dyn StructureRecovery) -> Result<Impo
         });
     }
 
-    // --- Path 3: naive text recovery ---------------------------------------
+    // --- Path 3: geometry-based recovery (untagged PDFs) -------------------
+    // Cluster positioned text into headings/paragraphs (and columns) from
+    // layout — better than naive line-grouping, still heuristic.
+    if let Some(blocks) = crate::geometry::recover_geometry(&pdf) {
+        let pages_read = pdf.get_pages().len();
+        let document = assemble(&pdf, bytes, blocks, crate::geometry::TOOL)?;
+        return Ok(ImportOutcome::Recovered {
+            document,
+            pages_read,
+            via: crate::geometry::TOOL.into(),
+        });
+    }
+
+    // --- Path 4: naive text recovery (final fallback) ----------------------
     let pages = pdf.get_pages();
     let mut page_texts = Vec::with_capacity(pages.len());
     for &num in pages.keys() {

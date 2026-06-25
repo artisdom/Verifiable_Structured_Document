@@ -41,7 +41,7 @@ derived; container as dumb transport. Each layer is independently verifiable.
 Phase 0  Foundations (canonical layer)        ████████████████████  SHIPPED (v0.1)
 Phase 1  Hardening & ecosystem hygiene        ███████████████████░  SHIPPED (v0.3) — crates.io publish awaits public repo
 Phase 2  The render layer (vsd-layout)        ████████████████████  SHIPPED (v0.5→0.22) — engines 1.0–1.11: faces, mono, underline, justification, bidi, hyphenation, widow/orphan, all shaped/complex scripts (Arabic→CJK→Tibetan/Khmer/Myanmar/Ethiopic), vertical text, PDF subsetting, section-level multi-column, and MathML Core layout; incremental relayout done — **Phase 2 complete**
-Phase 3  PDF interop (the adoption wedge)     ████████████████░░░░  SHIPPED (v0.7→0.23) — export + hybrid round-trip + md on-ramp + foreign tagged-structure import (3b); only JXL (3e) + PDF/A + richer 3c built-ins open
+Phase 3  PDF interop (the adoption wedge)     ███████████████████░  SHIPPED (v0.7→0.26) — export + hybrid round-trip + PDF/A (3a) + tagged import (3b) + geometry recovery (3c) + md & html on-ramps (3d) + migrate; only JXL recompression (3e) remains, blocked on a pure-Rust JXL encoder
 Phase 4  Viewing & authoring experience       ████████████░░░░░░░░  SHIPPED (v0.8) — vsd-view, <vsd-doc> WASM viewer, compose API, diff --html, interactive fill; bindings (4c) + Pandoc (4d) open
 Phase 5  Trust infrastructure at scale        █████████████████░░░  SHIPPED (v0.9→0.10) — salting (5f) + reference server (5e) now complete; full PKI (5a) + C2PA serialization (5c) open
 Phase 6  Standardization & governance         ███████████░░░░░░░░░  IN-REPO PARTS SHIPPED (v0.10) — spec consolidated, conformance program, governance docs, regulatory dossiers; external milestones (second impl, standards body) open by nature
@@ -401,8 +401,18 @@ be able to adopt VSD internally with **zero external-compatibility risk**.
       (page text → paragraphs, page-break hints). Output is always marked
       `format-migrated { lossy: true }` in provenance with the original
       PDF embedded as an attachment for legal continuity and its hash
-      recorded. ☐ Richer built-ins (column/table reconstruction,
-      document-understanding models) slot into the trait later.
+      recorded. **A geometry-based built-in shipped in v0.26**
+      ([`vsd-pdf/src/geometry.rs`](crates/vsd-pdf/src/geometry.rs)): for
+      *untagged* PDFs it decodes positioned text from the content streams
+      (text matrix + font size, glyph bytes through each font's encoding)
+      and **clusters by layout** — fragments → lines → paragraphs (split
+      on vertical-gap jumps), larger-than-body fonts → headings, and a
+      clean vertical gutter → two columns read left-to-right. Heuristic
+      (no ground truth in an untagged PDF) so still marked lossy, but
+      strictly better than naive line-grouping and it never invents
+      content. Runs ahead of `TextRecovery`, which remains the final
+      fallback. ☐ Table reconstruction from ruling/cell geometry and
+      document-understanding models still slot into the trait later.
 - [x] **3b. Tagged-PDF → VSD importer** — closed in **v0.23**. *Hybrid*
       PDFs (ours) import losslessly via the embedded source — identity
       verified, signatures intact. **Foreign tagged PDFs now walk their
@@ -712,6 +722,7 @@ core spec before a working prototype and an adversarial review.
 | **0.23** ✅ | Foreign tagged-PDF import | `vsd-pdf` walks a foreign PDF's `StructTreeRoot` into a semantic content tree (headings/levels, paragraphs, lists, tables with header scope, sections, code), resolving per-element text from marked content (MCID → text decoded via each font's encoding); still marked `format-migrated`, original attached. Closes ROADMAP 3b |
 | **0.24** ✅ | PDF/A export | `vsd export --pdfa`: archival PDF/A-3b (with the embedded `.vsd`, à la ZUGFeRD) or PDF/A-2b — XMP `pdfaid`, sRGB OutputIntent (pinned ICC), trailer `/ID`, subset-tagged fonts with `/CIDSet`; deterministic. Closes 3a's PDF/A tail |
 | **0.25** ✅ | HTML on-ramp | `vsd pack page.html`: direct HTML → VSD importer (headings/lists/tables/links/inline styling/code/blockquote/sections), `alt` enforced, scripts/styles/foreign content dropped, entities decoded. Closes 3d's HTML tail |
+| **0.26** ✅ | Geometry PDF recovery | Untagged foreign PDFs: cluster positioned text (text matrix + font size, decoded per font encoding) into headings/paragraphs/columns — runs ahead of naive text recovery, still marked lossy. Closes 3c's richer-built-in tail. **Phase 3 complete bar JXL (3e), blocked externally** |
 | **1.0** | Freeze | Spec 1.0, two implementations, audit complete, ISO/W3C track |
 
 *Versioning policy:* the format major version and the crate versions decouple

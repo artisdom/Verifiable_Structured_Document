@@ -20,6 +20,7 @@
 #![forbid(unsafe_code)]
 
 mod export;
+mod geometry;
 mod import;
 mod subset;
 mod tagged;

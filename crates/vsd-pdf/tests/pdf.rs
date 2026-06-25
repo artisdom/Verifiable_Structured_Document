@@ -170,7 +170,10 @@ fn foreign_pdf_recovers_heuristically_with_provenance() {
             via,
         } => {
             assert_eq!(pages_read, 1);
-            assert_eq!(via, "vsd-pdf/text-recovery", "untagged → text recovery");
+            assert_eq!(
+                via, "vsd-pdf/geometry-recovery",
+                "untagged with text → geometry recovery"
+            );
             let report = vsd_core::validate::validate(&document);
             assert!(report.is_valid(), "findings: {:?}", report.findings);
 
@@ -210,6 +213,106 @@ fn vsd_to_pdf_to_vsd_preserves_content_tree() {
         vsd_core::extract::extract_text(&document).unwrap(),
         vsd_core::extract::extract_text(&doc).unwrap()
     );
+}
+
+/// Geometry recovery of an untagged PDF: a large-font line becomes a
+/// heading, and body lines group into paragraphs by their vertical gaps.
+#[test]
+fn untagged_pdf_recovers_headings_and_paragraphs_by_geometry() {
+    let pdf = geometry_foreign_pdf();
+    let ImportOutcome::Recovered { document, via, .. } = import_pdf(&pdf, &TextRecovery).unwrap()
+    else {
+        panic!("geometry recovery expected");
+    };
+    assert_eq!(via, "vsd-pdf/geometry-recovery");
+
+    let Node::Doc(d) = document.root_node().unwrap() else {
+        panic!("doc root");
+    };
+    // First block: a heading recovered from the 24pt line.
+    match &d.children[0] {
+        Node::Heading(h) => assert!(
+            inline_to_string(&h.children).contains("Big Title"),
+            "heading text"
+        ),
+        other => panic!("expected a heading, got {other:?}"),
+    }
+    // Then two paragraphs; the first joins the two closely-spaced lines.
+    let paras: Vec<String> = d
+        .children
+        .iter()
+        .filter_map(|n| match n {
+            Node::Para(p) => Some(inline_to_string(&p.children)),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(paras.len(), 2, "two paragraphs by vertical gap");
+    assert!(paras[0].contains("First body line") && paras[0].contains("Second line"));
+    assert!(paras[1].contains("new paragraph"));
+    assert!(vsd_core::validate::validate(&document).is_valid());
+}
+
+fn inline_to_string(inls: &[Inline]) -> String {
+    inls.iter()
+        .map(|i| match i {
+            Inline::Text(t) => t.clone(),
+            _ => String::new(),
+        })
+        .collect()
+}
+
+/// A foreign PDF (no structure tree) with a 24pt title and three 12pt
+/// body lines positioned absolutely — exercises geometry clustering.
+fn geometry_foreign_pdf() -> Vec<u8> {
+    use lopdf::content::{Content, Operation};
+    use lopdf::{dictionary, Object, Stream};
+
+    let mut doc = lopdf::Document::with_version("1.5");
+    let pages_id = doc.new_object_id();
+    let font_id = doc.add_object(dictionary! {
+        "Type" => "Font", "Subtype" => "Type1", "BaseFont" => "Helvetica",
+    });
+    let resources_id = doc.add_object(dictionary! {
+        "Font" => dictionary! { "F1" => font_id },
+    });
+    // (size, y, text) — line 1&2 are close (same paragraph), line 3 after
+    // a larger gap (new paragraph).
+    let lines: [(i64, i64, &str); 4] = [
+        (24, 720, "Big Title"),
+        (12, 690, "First body line of text."),
+        (12, 676, "Second line same paragraph."),
+        (12, 640, "A new paragraph after a gap."),
+    ];
+    let mut ops = vec![Operation::new("BT", vec![])];
+    for (size, y, text) in lines {
+        ops.push(Operation::new("Tf", vec!["F1".into(), size.into()]));
+        ops.push(Operation::new(
+            "Tm",
+            vec![1.into(), 0.into(), 0.into(), 1.into(), 72.into(), y.into()],
+        ));
+        ops.push(Operation::new("Tj", vec![Object::string_literal(text)]));
+    }
+    ops.push(Operation::new("ET", vec![]));
+    let content_id = doc.add_object(Stream::new(
+        dictionary! {},
+        Content { operations: ops }.encode().unwrap(),
+    ));
+    let page_id = doc.add_object(dictionary! {
+        "Type" => "Page", "Parent" => pages_id, "Contents" => content_id,
+        "Resources" => resources_id,
+        "MediaBox" => vec![0.into(), 0.into(), 612.into(), 792.into()],
+    });
+    doc.objects.insert(
+        pages_id,
+        Object::Dictionary(dictionary! {
+            "Type" => "Pages", "Kids" => vec![page_id.into()], "Count" => 1,
+        }),
+    );
+    let catalog_id = doc.add_object(dictionary! { "Type" => "Catalog", "Pages" => pages_id });
+    doc.trailer.set("Root", catalog_id);
+    let mut out = Vec::new();
+    doc.save_to(&mut out).unwrap();
+    out
 }
 
 /// Minimal foreign PDF via lopdf (Helvetica, uncompressed content).
