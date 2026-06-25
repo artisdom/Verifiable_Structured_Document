@@ -14,6 +14,9 @@ categories.workspace = true
 vsd-core = { workspace = true, features = ["std"] }
 vsd-container = { workspace = true, features = ["zstd"] }
 vsd-layout = { workspace = true }
+# Same pinned parser the engine measures with — used to self-verify font
+# subsets before embedding (see src/subset.rs).
+ttf-parser = "=0.25.1"
 thiserror = { workspace = true, features = ["std"] }
 hex = { workspace = true, features = ["std"] }
 # zlib (FlateDecode) compression for content streams and images

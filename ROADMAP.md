@@ -314,12 +314,18 @@ forever against their pinned engine.
       punctuation/fullwidth** routing to the pan-CJK face. Routed via a
       version-gated style policy (these blocks were never in the
       historical refusal set), so frozen engines stay byte-identical;
-      1.0–1.8 hashes unchanged, no format change. ☐ Still
-      refused/deferred (genuinely peripheral): vertical
-      tables/tate-chu-yoko, PDF font subsetting (CJK PDFs embed the full
-      16 MB font), multi-column, MathML, and rare/historic or
-      special-handling scripts (Mongolian — itself vertical — N'Ko,
-      Adlam, Syriac, …).
+      1.0–1.8 hashes unchanged, no format change. **2i "Shaped & complex
+      scripts" is fully closed.** **PDF font subsetting shipped (v0.20)**:
+      `vsd-pdf` now embeds only the used glyphs via a from-scratch,
+      deterministic, glyph-id-stable subsetter for TrueType (`glyf`)
+      **and** CFF (the 16 MB pan-CJK face) — self-verified against the
+      pinned `ttf-parser` with a full-font fallback, so it can only ever
+      produce a *smaller* PDF, never a broken one (CJK roughly halves).
+      ☐ Still deferred (genuinely peripheral): vertical
+      tables/tate-chu-yoko, CFF subr subsetting (a further size win
+      needing a Type2 interpreter), multi-column, MathML, and
+      rare/historic or special-handling scripts (Mongolian — itself
+      vertical — N'Ko, Adlam, Syriac, …).
 - [ ] **2j. Advanced page layout**: floats & multi-column (needs a
       `columns` block attribute — an additive format change) and MathML
       layout (today math renders via its fallback image or as code).
@@ -653,6 +659,7 @@ core spec before a working prototype and an adversarial review.
 | **0.17** ✅ | Engine 1.7 CJK (horizontal) | Han/kana/Hangul in the pinned full Noto Sans CJK SC face (16 MB CFF, CID==GID); per-glyph layout + inter-ideograph line breaking (kinsoku); new CFF `FontFile3`/`CIDFontType0` PDF path; no format change; 1.0–1.6 hashes unchanged |
 | **0.18** ✅ | Engine 1.8 vertical text | `vertical-rl` writing mode via additive format-0.5 `wm` doc attribute; top-to-bottom columns advancing right-to-left; one positioned run/char (op order = reading order); horizontal byte-identical to 1.7 (1.0–1.7 layout hashes unchanged) |
 | **0.19** ✅ | Engine 1.9 remaining complex scripts | Tibetan (tsheg breaking) + Khmer/Myanmar (dictionary breaking) + Ethiopic, shaped by pinned rustybuzz; CJK punctuation/fullwidth routed to the pan-CJK face; version-gated style policy keeps 1.0–1.8 byte-identical; no format change |
+| **0.20** ✅ | PDF font subsetting | From-scratch deterministic, glyph-id-stable subsetter (TrueType `glyf` + CFF) in `vsd-pdf`; embeds only used glyphs; self-verified against the pinned ttf-parser with full-font fallback (can only shrink, never break); CJK PDFs roughly halve |
 | **1.0** | Freeze | Spec 1.0, two implementations, audit complete, ISO/W3C track |
 
 *Versioning policy:* the format major version and the crate versions decouple

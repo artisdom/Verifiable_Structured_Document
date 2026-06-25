@@ -45,7 +45,7 @@ four properties that matter and removes the failure modes by construction:
 | [`vsd-sign`](crates/vsd-sign) | Ed25519 signatures over document/subtree Merkle roots, with domain separation (wire format reserves `ecdsa-p256`, `ml-dsa-65`) |
 | [`vsd-layout`](crates/vsd-layout) | The reference layout engine (versions **1.0–1.9**, each an immutable contract): a deterministic projection from content tree to display lists — integer-µm arithmetic, twenty-four pinned Noto faces (incl. a full pan-CJK CFF face), horizontal **and vertical** (`vertical-rl`) writing, pinned hyphenation patterns + pinned shaper (rustybuzz) + pinned Unicode mirroring table + pinned ICU Thai/Lao/Khmer/Burmese dictionaries, normative contracts in [docs/LAYOUT-1.0.md](docs/LAYOUT-1.0.md)…[1.9.md](docs/LAYOUT-1.9.md) |
 | [`vsd-render`](crates/vsd-render) | Rasterizer: display-list pages → PNG via tiny-skia, drawing with the same pinned font the engine measured with |
-| [`vsd-pdf`](crates/vsd-pdf) | PDF interop: deterministic **tagged** PDF export with the canonical `.vsd` embedded (hybrid PDF — round trips losslessly, verifiable by document id); import with hybrid recovery + pluggable structure recovery for foreign PDFs |
+| [`vsd-pdf`](crates/vsd-pdf) | PDF interop: deterministic **tagged** PDF export with the canonical `.vsd` embedded (hybrid PDF — round trips losslessly, verifiable by document id) and **from-scratch, self-verified font subsetting** (TrueType + CFF); import with hybrid recovery + pluggable structure recovery for foreign PDFs |
 | [`vsd-tlog`](crates/vsd-tlog) | Transparency log: RFC 6962-style Merkle tree over document ids — inclusion + consistency proofs, signed tree heads ("this contract existed, in exactly this form, at this time") |
 | [`vsd-view`](crates/vsd-view) | Native viewer: page nav, zoom, exact search with highlights, copy — and the **verification banner** (validate + signatures + layout recomputation) as the first thing on screen |
 | [`vsd-web`](crates/vsd-web) | The browser viewer: the full verify+layout+render stack as WASM behind a tiny C ABI, consumed by a dependency-free `<vsd-doc>` web component — no plugin, no install |
@@ -421,14 +421,25 @@ CLI.
   blocks were never refused historically), so 1.0–1.8 are byte-identical;
   no format change.
 
+**Implemented (v0.20 — PDF font subsetting):**
+
+- `vsd-pdf` embeds only the **used glyphs** of each face, via a
+  from-scratch, deterministic, **glyph-id-stable** subsetter for TrueType
+  (`glyf`) **and** CFF (the 16 MB pan-CJK face). It is **self-verified**:
+  the subset is re-parsed with the same pinned `ttf-parser` and every
+  used glyph's outline + advance is compared to the original; on any
+  mismatch it falls back to the full font. So a subsetter bug can only
+  ever yield a *larger* PDF, never a broken one. (Keeps CID == GID, so no
+  `CIDToGIDMap` churn.)
+
 **Not yet implemented (the honest list):**
 
 - Layout engine widening (engine 1.10+): vertical tables & tate-chu-yoko,
-  PDF font subsetting (CJK PDFs embed the full 16 MB font), multi-column,
-  MathML layout, and rare/historic or special-handling scripts
-  (Mongolian, N'Ko, Adlam, Syriac, …). The engine refuses or leaves on
-  the Regular path what it cannot set faithfully rather than
-  mis-rendering it.
+  multi-column, MathML layout, and rare/historic or special-handling
+  scripts (Mongolian, N'Ko, Adlam, Syriac, …). CFF subr subsetting (a
+  further PDF size win needing a Type2 charstring interpreter). The
+  engine refuses or leaves on the Regular path what it cannot set
+  faithfully rather than mis-rendering it.
 - Python/TypeScript authoring bindings; Pandoc/Typst backends;
   viewer-integrated form filling; a browser text-selection layer.
 - PDF/A-2b export mode; foreign tagged-PDF structure-tree import; richer

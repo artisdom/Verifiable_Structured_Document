@@ -21,6 +21,7 @@
 
 mod export;
 mod import;
+mod subset;
 mod write;
 
 use thiserror::Error;

@@ -16,7 +16,7 @@
 //! The writer is deterministic: no timestamps, no randomness, fixed
 //! compression — same document, same bytes.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write as _;
 
 use vsd_core::document::Document;
@@ -574,15 +574,20 @@ fn build_struct_tree(
 fn embed_font(w: &mut PdfWriter, typeface: Face, gids: &BTreeMap<u16, char>) -> ObjId {
     let metrics = FontMetrics::face_metrics(typeface);
     let face = metrics.face();
-    let font_bytes = typeface.bytes();
     let font_name = typeface.name();
+
+    // Embed only the used glyphs: a glyph-id-stable subset (unused
+    // outlines emptied). Deterministic and self-verified — falls back to
+    // the full font if subsetting can't be proven correct (see `subset`).
+    let used: BTreeSet<u16> = gids.keys().copied().collect();
+    let font_bytes = crate::subset::subset_face(typeface.bytes(), &used);
 
     // The pinned CJK face is a CFF/OpenType font (CID-keyed,
     // Adobe-Identity-0 ROS → CID == GID), so it embeds as FontFile3
     // (/Subtype /OpenType) under a CIDFontType0 descendant. Every other
     // pinned face is TrueType: FontFile2 + CIDFontType2.
     let is_cff = matches!(typeface, Face::Cjk);
-    let compressed = flate(font_bytes);
+    let compressed = flate(&font_bytes);
     let font_file_entry = if is_cff {
         let ff = w.stream(
             &format!(
