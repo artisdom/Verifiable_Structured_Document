@@ -31,6 +31,34 @@ function readResult(api, len) {
   return new Uint8Array(api.memory.buffer.slice(ptr, ptr + len));
 }
 
+/**
+ * Build a transparent, selectable text layer for one page from the
+ * `vsd_page_text` JSON ({w_mm, h_mm, runs:[{x,y,size,rtl,text}]}).
+ *
+ * Everything is positioned in container-relative units so the layer
+ * scales with the page image responsively: `%` for left/top, `cqw`
+ * (1% of the container's width) for font-size. `y` is the baseline, so
+ * the span's top is lifted by ~0.8em (the approximate ascent). The text
+ * is the run's logical text, so selection and copy yield source order.
+ */
+function buildTextLayer(pg) {
+  const layer = document.createElement("div");
+  layer.className = "textlayer";
+  const w = pg.w_mm || 1;
+  const h = pg.h_mm || 1;
+  for (const r of pg.runs) {
+    const span = document.createElement("span");
+    span.textContent = r.text;
+    const fhMm = (r.size * 25.4) / 72; // font height in mm
+    span.style.left = `${(r.x / w) * 100}%`;
+    span.style.top = `${((r.y - fhMm * 0.8) / h) * 100}%`;
+    span.style.fontSize = `${(fhMm / w) * 100}cqw`;
+    if (r.rtl) span.dir = "rtl";
+    layer.appendChild(span);
+  }
+  return layer;
+}
+
 const BADGES = {
   match: ["#1e5631", "#d9f2e0", "verified — pixels match content (recomputed)"],
   "fresh-layout": ["#1e5631", "#d9f2e0", "verified — laid out from content"],
@@ -57,7 +85,17 @@ class VsdDoc extends HTMLElement {
       :host{display:block;font:14px/1.4 system-ui,sans-serif}
       .badge{padding:.5em .9em;border-radius:6px;margin-bottom:.6em}
       .meta{color:#555;font-size:.85em;margin-bottom:1em;word-break:break-all}
-      .page{box-shadow:0 1px 6px rgba(0,0,0,.25);margin:0 auto 1.2em;display:block;max-width:100%}
+      /* Each page is its own inline-size container so the overlaid text
+         layer scales with the page using container-query units (cqw). */
+      .page-wrap{position:relative;container-type:inline-size;margin:0 auto 1.2em;
+        max-width:100%;box-shadow:0 1px 6px rgba(0,0,0,.25)}
+      .page-wrap img{display:block;width:100%;height:auto}
+      /* Transparent, positioned spans of the real logical text: the
+         browser's native selection and copy run on these, not on pixels. */
+      .textlayer{position:absolute;inset:0;overflow:hidden;line-height:1}
+      .textlayer span{position:absolute;white-space:pre;color:transparent;
+        transform-origin:left top;cursor:text}
+      .textlayer span::selection{background:rgba(70,120,255,.35)}
     </style><div class="badge">loading…</div>`;
     const badge = root.querySelector(".badge");
 
@@ -100,14 +138,26 @@ class VsdDoc extends HTMLElement {
         root.appendChild(meta);
 
         const dpi = Number(this.getAttribute("dpi") ?? 96);
+        const dec = new TextDecoder();
         for (let i = 0; i < info.pages; i++) {
           const len = api.vsd_render_page(handle, i, dpi);
           if (len < 0) continue;
+          const wrap = document.createElement("div");
+          wrap.className = "page-wrap";
+
           const img = document.createElement("img");
-          img.className = "page";
           img.alt = `Page ${i + 1}`;
+          // Read the PNG before the next WASM call overwrites the result buffer.
           img.src = URL.createObjectURL(new Blob([readResult(api, len)], { type: "image/png" }));
-          root.appendChild(img);
+          wrap.appendChild(img);
+
+          // Overlay a selectable text layer from the page's text runs.
+          const tlen = api.vsd_page_text(handle, i);
+          if (tlen >= 0) {
+            const pg = JSON.parse(dec.decode(readResult(api, tlen)));
+            wrap.appendChild(buildTextLayer(pg));
+          }
+          root.appendChild(wrap);
         }
       } finally {
         api.vsd_close(handle);

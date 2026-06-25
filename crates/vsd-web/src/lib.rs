@@ -15,7 +15,7 @@
 #![deny(unsafe_code)]
 
 use vsd_container::ReadOptions;
-use vsd_core::layout::Page;
+use vsd_core::layout::{DisplayOp, Page};
 use vsd_core::Document;
 
 /// A loaded document plus its display lists (from the render cache when
@@ -96,6 +96,61 @@ impl Session {
         vsd_core::extract::extract_text(&self.document).map_err(|e| e.to_string())
     }
 
+    /// Geometry of a page's text runs, as JSON, for the viewer's
+    /// **selectable text layer** (ROADMAP 4b). Each run carries its
+    /// **logical** text (so a copy yields source order even for shaped /
+    /// RTL runs) plus its position in millimetres from the page's
+    /// top-left and its size in points:
+    ///
+    /// ```json
+    /// {"w_mm":210.0,"h_mm":297.0,
+    ///  "runs":[{"x":20.0,"y":28.3,"size":12.0,"rtl":false,"text":"…"}]}
+    /// ```
+    ///
+    /// `y` is the text baseline. The JS overlays one transparent,
+    /// positioned span per run over the rendered page so the browser's
+    /// native selection and copy operate on real text — never on raster
+    /// heuristics.
+    pub fn page_text_json(&self, page: usize) -> Result<String, String> {
+        let p = self.pages.get(page).ok_or("page out of range")?;
+        let mut runs: Vec<serde_json::Value> = Vec::new();
+        let mut push = |x: &f64, y: &f64, size: &f64, rtl: bool, text: &str| {
+            if !text.trim().is_empty() {
+                runs.push(serde_json::json!({
+                    "x": x, "y": y, "size": size, "rtl": rtl, "text": text,
+                }));
+            }
+        };
+        for op in &p.ops {
+            match op {
+                DisplayOp::TextRun {
+                    x,
+                    y,
+                    size_pt,
+                    rtl,
+                    text,
+                    ..
+                } => push(x, y, size_pt, *rtl, text),
+                // Shaped runs keep their logical `text`; the glyphs are
+                // visual but a selection should yield source order.
+                DisplayOp::GlyphRun {
+                    x,
+                    y,
+                    size_pt,
+                    text,
+                    ..
+                } => push(x, y, size_pt, false, text),
+                _ => {}
+            }
+        }
+        Ok(serde_json::json!({
+            "w_mm": p.width_mm,
+            "h_mm": p.height_mm,
+            "runs": runs,
+        })
+        .to_string())
+    }
+
     /// Re-run the layout engine against the content tree (spec §5.3).
     pub fn verify_recompute(&self) -> Result<VerifyState, String> {
         if !self.from_cache {
@@ -140,9 +195,9 @@ impl Session {
 ///
 /// 1. `vsd_alloc(len)` → write your bytes into linear memory
 /// 2. `vsd_open(ptr, len)` → handle (> 0) or 0 on failure
-/// 3. `vsd_page_count`, `vsd_render_page`, `vsd_text`, `vsd_info`,
-///    `vsd_verify` — buffer-returning calls expose the result via
-///    `vsd_buf_ptr()` + their returned length
+/// 3. `vsd_page_count`, `vsd_render_page`, `vsd_text`, `vsd_page_text`,
+///    `vsd_info`, `vsd_verify` — buffer-returning calls expose the result
+///    via `vsd_buf_ptr()` + their returned length
 /// 4. `vsd_close(handle)`, `vsd_free(ptr, len)`
 #[allow(unsafe_code)]
 #[cfg(target_arch = "wasm32")]
@@ -243,6 +298,19 @@ mod ffi {
         })
     }
 
+    /// JSON geometry of one page's text runs for the selectable text
+    /// layer (see [`Session::page_text_json`]).
+    #[no_mangle]
+    pub extern "C" fn vsd_page_text(handle: i32, page: u32) -> i32 {
+        SESSIONS.with(|s| {
+            s.borrow()
+                .get(&handle)
+                .and_then(|x| x.page_text_json(page as usize).ok())
+                .map(|t| put_result(t.into_bytes()))
+                .unwrap_or(-1)
+        })
+    }
+
     #[no_mangle]
     pub extern "C" fn vsd_info(handle: i32) -> i32 {
         SESSIONS.with(|s| {
@@ -328,6 +396,31 @@ mod tests {
         let info: serde_json::Value = serde_json::from_str(&session.info_json()).unwrap();
         assert_eq!(info["signatures"], 2);
         assert_eq!(info["signatures_valid"], 2);
+    }
+
+    #[test]
+    fn page_text_layer_carries_positioned_logical_text() {
+        let session = Session::open(&doc_bytes(false)).unwrap();
+        let json: serde_json::Value =
+            serde_json::from_str(&session.page_text_json(0).unwrap()).unwrap();
+        assert!(json["w_mm"].as_f64().unwrap() > 0.0);
+        assert!(json["h_mm"].as_f64().unwrap() > 0.0);
+        let runs = json["runs"].as_array().unwrap();
+        assert!(!runs.is_empty(), "page has text runs");
+        // Every run has finite geometry and non-empty logical text.
+        let joined: String = runs
+            .iter()
+            .map(|r| r["text"].as_str().unwrap_or(""))
+            .collect::<Vec<_>>()
+            .join(" ");
+        assert!(joined.contains("Hello browser"), "logical text: {joined}");
+        for r in runs {
+            assert!(r["x"].as_f64().unwrap() >= 0.0);
+            assert!(r["y"].as_f64().unwrap() >= 0.0);
+            assert!(r["size"].as_f64().unwrap() > 0.0);
+        }
+        // Out-of-range page is an error, not a panic.
+        assert!(session.page_text_json(99).is_err());
     }
 
     #[test]

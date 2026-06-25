@@ -291,7 +291,10 @@ CLI.
   metric-true highlights, zoom, copy. Visually verified
   ([screenshot](docs/vsd-view.png)); the view-model is GUI-free and tested.
 - **`vsd-web` + `<vsd-doc>`** — the whole verify/layout/render stack in the
-  browser via WASM and ~150 lines of dependency-free JS; pure-Rust zstd
+  browser via WASM and ~150 lines of dependency-free JS, now with a
+  **selectable text layer** (transparent positioned spans of the real
+  logical text overlaid on each page, so native browser select/copy works
+  on text, not pixels); pure-Rust zstd
   decode (`zstd-pure`) so compressed containers open client-side.
 - **`Compose`** — fluent Rust authoring (`.h1().para().table()…`), the
   high-level API invoice generators actually want.

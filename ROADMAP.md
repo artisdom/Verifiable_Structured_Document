@@ -42,7 +42,7 @@ Phase 0  Foundations (canonical layer)        ███████████�
 Phase 1  Hardening & ecosystem hygiene        ███████████████████░  SHIPPED (v0.3) — crates.io publish awaits public repo
 Phase 2  The render layer (vsd-layout)        ████████████████████  SHIPPED (v0.5→0.22) — engines 1.0–1.11: faces, mono, underline, justification, bidi, hyphenation, widow/orphan, all shaped/complex scripts (Arabic→CJK→Tibetan/Khmer/Myanmar/Ethiopic), vertical text, PDF subsetting, section-level multi-column, and MathML Core layout; incremental relayout done — **Phase 2 complete**
 Phase 3  PDF interop (the adoption wedge)     ███████████████████░  SHIPPED (v0.7→0.26) — export + hybrid round-trip + PDF/A (3a) + tagged import (3b) + geometry recovery (3c) + md & html on-ramps (3d) + migrate; only JXL recompression (3e) remains, blocked on a pure-Rust JXL encoder
-Phase 4  Viewing & authoring experience       ████████████░░░░░░░░  SHIPPED (v0.8) — vsd-view, <vsd-doc> WASM viewer, compose API, diff --html, interactive fill; bindings (4c) + Pandoc (4d) open
+Phase 4  Viewing & authoring experience       █████████████████░░░  SHIPPED (v0.8→0.28) — vsd-view, <vsd-doc> WASM viewer + selectable text layer (4b), compose API, diff --html, interactive fill, Pandoc on-ramp (4d); only native-viewer GUI polish (4a), language bindings (4c), and viewer form-fill (4e) — all GUI/packaging work — remain open
 Phase 5  Trust infrastructure at scale        █████████████████░░░  SHIPPED (v0.9→0.10) — salting (5f) + reference server (5e) now complete; full PKI (5a) + C2PA serialization (5c) open
 Phase 6  Standardization & governance         ███████████░░░░░░░░░  IN-REPO PARTS SHIPPED (v0.10) — spec consolidated, conformance program, governance docs, regulatory dossiers; external milestones (second impl, standards body) open by nature
 Moonshots                                     see §10
@@ -491,7 +491,15 @@ Formats win when reading them is frictionless and producing them is one line.
       signature verification shipped in v0.10**: `vsd-sign` gained a
       `keygen` feature so verification (Ed25519 *and* hybrid PQ) is
       RNG-free, and the badge now reports signatures verified
-      client-side. ☐ A text layer for selection remains open.
+      client-side. **A selectable text layer shipped in v0.28**: a new
+      `vsd_page_text` C ABI export returns each page's text-run geometry
+      (logical text + position in mm + size), and `<vsd-doc>` overlays one
+      transparent, positioned span per run over the rendered page —
+      positioned in container-query units so it scales with the page — so
+      the browser's **native selection and copy operate on real text**
+      (logical order, even for shaped/RTL runs), not raster heuristics.
+      The Rust geometry export is unit-tested; the in-browser selection
+      itself is not headlessly testable (noted, not claimed).
 - [◐] **4c. Authoring libraries**: the high-level Rust builder shipped
       (`vsd_core::compose::Compose` — fluent
       `.h1().para().table().section()` chains, doc-tested). ☐ Python
@@ -737,6 +745,7 @@ core spec before a working prototype and an adversarial review.
 | **0.25** ✅ | HTML on-ramp | `vsd pack page.html`: direct HTML → VSD importer (headings/lists/tables/links/inline styling/code/blockquote/sections), `alt` enforced, scripts/styles/foreign content dropped, entities decoded. Closes 3d's HTML tail |
 | **0.26** ✅ | Geometry PDF recovery | Untagged foreign PDFs: cluster positioned text (text matrix + font size, decoded per font encoding) into headings/paragraphs/columns — runs ahead of naive text recovery, still marked lossy. Closes 3c's richer-built-in tail. **Phase 3 complete bar JXL (3e), blocked externally** |
 | **0.27** ✅ | Pandoc on-ramp | `vsd pack-pandoc`: Pandoc JSON AST → VSD (headers/lists/tables/code/quotes/figures/links/inline styling), unlocking docx/rst/LaTeX/Org/EPUB/… through one importer; `alt` enforced, foreign content dropped. Closes ROADMAP 4d |
+| **0.28** ✅ | Browser text layer | `<vsd-doc>` overlays a transparent, selectable text layer (new `vsd_page_text` ABI returns per-run logical text + geometry; positioned in container-query units) → native browser select/copy on real text. Closes 4b's text-layer tail |
 | **1.0** | Freeze | Spec 1.0, two implementations, audit complete, ISO/W3C track |
 
 *Versioning policy:* the format major version and the crate versions decouple

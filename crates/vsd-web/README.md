@@ -41,6 +41,15 @@ The component renders every page and shows a verification badge:
 Signature *presence* is reported; in-browser Ed25519 verification is a
 follow-up (it needs a getrandom-free verify path wired for wasm).
 
+## Text selection
+
+Over each rendered page the component overlays a **selectable text
+layer**: the `vsd_page_text` ABI returns every text run's logical text
+and geometry (position in mm, size in pt), and the JS places one
+transparent, container-query-sized span per run. The browser's own
+selection and copy then operate on the real, source-order text — even
+for shaped or right-to-left runs — rather than on raster guesses.
+
 ## Safety posture
 
 `vsd-web` is `#![deny(unsafe_code)]` with one `#[allow]`-scoped FFI
