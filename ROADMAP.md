@@ -423,8 +423,16 @@ be able to adopt VSD internally with **zero external-compatibility risk**.
 - [x] **3d. Markdown → VSD** (`vsd pack notes.md`): CommonMark + tables via
       pulldown-cmark — headings, lists, code, tables, quotes, links,
       emphasis (style table), images (alt text required, enforced). HTML
-      passthrough is deliberately dropped (no foreign content). ☐ A direct
-      HTML importer remains open.
+      passthrough inside Markdown is deliberately dropped (no foreign
+      content). **A direct HTML importer shipped in v0.25**
+      (`vsd pack page.html`, [`vsd-cli/src/html.rs`](crates/vsd-cli/src/html.rs)):
+      headings (with level), paragraphs, ordered/unordered lists, tables
+      (`th` → header scope), `pre`/`code`, blockquotes, `section`/`article`
+      → sections, links and inline styling (`b`/`i`/`u`/`code` → style
+      table), with image `alt` **required** and `<script>`/`<style>`/
+      `<head>`/foreign content dropped — same no-foreign-content discipline
+      as the Markdown path. Common HTML entities (numeric + named) are
+      decoded; unknown named entities are left verbatim.
 - [ ] **3e. JPEG → JXL lossless recompression** + WOFF2 subsetting with the
       normative coverage check. Blocked on a production-grade pure-Rust JXL
       *encoder* (jxl-oxide is decode-only); revisit when one exists. JPEG
@@ -703,6 +711,7 @@ core spec before a working prototype and an adversarial review.
 | **0.22** ✅ | Engine 1.11 MathML | MathML Core (subset) layout with the pinned STIX Two Math face + OpenType MATH table (super/subscripts, fractions, radicals, under/over, fences); unsupported MathML uses the fallback image or is refused; no format change (1.0–1.10 byte-identical). **Phase 2 complete** |
 | **0.23** ✅ | Foreign tagged-PDF import | `vsd-pdf` walks a foreign PDF's `StructTreeRoot` into a semantic content tree (headings/levels, paragraphs, lists, tables with header scope, sections, code), resolving per-element text from marked content (MCID → text decoded via each font's encoding); still marked `format-migrated`, original attached. Closes ROADMAP 3b |
 | **0.24** ✅ | PDF/A export | `vsd export --pdfa`: archival PDF/A-3b (with the embedded `.vsd`, à la ZUGFeRD) or PDF/A-2b — XMP `pdfaid`, sRGB OutputIntent (pinned ICC), trailer `/ID`, subset-tagged fonts with `/CIDSet`; deterministic. Closes 3a's PDF/A tail |
+| **0.25** ✅ | HTML on-ramp | `vsd pack page.html`: direct HTML → VSD importer (headings/lists/tables/links/inline styling/code/blockquote/sections), `alt` enforced, scripts/styles/foreign content dropped, entities decoded. Closes 3d's HTML tail |
 | **1.0** | Freeze | Spec 1.0, two implementations, audit complete, ISO/W3C track |
 
 *Versioning policy:* the format major version and the crate versions decouple

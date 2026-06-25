@@ -21,6 +21,8 @@ vsd-render = { workspace = true }
 vsd-pdf = { workspace = true }
 vsd-tlog = { workspace = true }
 pulldown-cmark = { version = "0.12", default-features = false }
+# Lightweight pure-Rust HTML parser for the `vsd pack *.html` on-ramp.
+tl = "0.7"
 vsd-container = { workspace = true, features = ["zstd"] }
 vsd-sign = { workspace = true, features = ["keygen"] }
 clap = { workspace = true }

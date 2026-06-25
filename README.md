@@ -272,8 +272,11 @@ CLI.
   untagged PDFs fall back to a pluggable `StructureRecovery` trait (naive
   text recovery built in). Always marked `format-migrated { lossy: true }`
   in provenance with the original PDF embedded for legal continuity.
-- **Markdown on-ramp**: `vsd pack README.md` (CommonMark + tables); alt
-  text on images enforced, HTML passthrough deliberately dropped.
+- **Markdown & HTML on-ramps**: `vsd pack README.md` (CommonMark +
+  tables) and `vsd pack page.html` (a direct HTML importer — headings,
+  lists, tables with header scope, links, inline styling, code,
+  blockquotes, sections); alt text on images enforced,
+  scripts/styles/foreign content dropped.
 - **`vsd migrate`**: batch directory conversion with the dedup report.
 
 **Implemented (v0.8, Phase 4 — viewing & authoring):**

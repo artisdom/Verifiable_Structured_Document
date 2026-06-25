@@ -3,6 +3,7 @@
 #![forbid(unsafe_code)]
 
 mod author;
+mod html;
 mod htmldiff;
 mod markdown;
 mod serve;
@@ -32,8 +33,8 @@ struct Cli {
 enum Command {
     /// Create a .vsd from a JSON authoring file or a Markdown file.
     Pack {
-        /// Input document: .json (authoring dialect) or .md (CommonMark
-        /// + tables). Format is inferred from the extension.
+        /// Input document: .json (authoring dialect), .md (CommonMark +
+        /// tables), or .html. Format is inferred from the extension.
         input: PathBuf,
         /// Output .vsd path.
         #[arg(short, long)]
@@ -185,8 +186,8 @@ enum Command {
         #[arg(short, long)]
         output: PathBuf,
     },
-    /// Batch-convert a directory of .json/.md/.pdf files to .vsd and
-    /// report cross-document object deduplication.
+    /// Batch-convert a directory of .json/.md/.html/.pdf files to .vsd
+    /// and report cross-document object deduplication.
     Migrate {
         input_dir: PathBuf,
         #[arg(short, long)]
@@ -379,6 +380,7 @@ fn pack(input: &Path, output: &Path, profile: &str, no_compress: bool) -> Result
         std::fs::read_to_string(input).with_context(|| format!("reading {}", input.display()))?;
     let doc = match input.extension().and_then(|e| e.to_str()) {
         Some("md") | Some("markdown") => markdown::document_from_markdown(&text, base, profile)?,
+        Some("html") | Some("htm") => html::document_from_html(&text, base, profile)?,
         _ => {
             let json: serde_json::Value =
                 serde_json::from_str(&text).context("parsing authoring JSON")?;
@@ -1148,6 +1150,14 @@ fn migrate(input_dir: &Path, output_dir: &Path, profile: &str) -> Result<()> {
                         profile,
                     )
                 }
+                Some("html") | Some("htm") => {
+                    let text = std::fs::read_to_string(path)?;
+                    html::document_from_html(
+                        &text,
+                        path.parent().unwrap_or(Path::new(".")),
+                        profile,
+                    )
+                }
                 Some("json") => {
                     let json: serde_json::Value =
                         serde_json::from_str(&std::fs::read_to_string(path)?)?;
@@ -1218,7 +1228,7 @@ fn collect_migratable(dir: &Path, out: &mut Vec<PathBuf>) -> Result<()> {
             collect_migratable(&path, out)?;
         } else if matches!(
             path.extension().and_then(|e| e.to_str()),
-            Some("json") | Some("md") | Some("markdown") | Some("pdf")
+            Some("json") | Some("md") | Some("markdown") | Some("html") | Some("htm") | Some("pdf")
         ) {
             out.push(path);
         }
