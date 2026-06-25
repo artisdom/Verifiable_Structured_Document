@@ -281,7 +281,9 @@ CLI.
   sections), and `pandoc paper.docx -t json | vsd pack-pandoc` (the
   Pandoc JSON AST, unlocking docx/rst/LaTeX/Org/EPUB/… through one
   importer); alt text on images enforced, scripts/styles/foreign content
-  dropped.
+  dropped. The **reverse** direction ships too: `vsd export-pandoc`
+  emits the Pandoc JSON AST (`… | pandoc -f json -o out.docx` reaches
+  every format Pandoc writes) and `vsd export-typst` emits Typst source.
 - **`vsd migrate`**: batch directory conversion with the dedup report.
 
 **Implemented (v0.8, Phase 4 — viewing & authoring):**

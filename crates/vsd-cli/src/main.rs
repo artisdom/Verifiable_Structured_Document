@@ -3,6 +3,8 @@
 #![forbid(unsafe_code)]
 
 mod author;
+mod export_pandoc;
+mod export_typst;
 mod html;
 mod htmldiff;
 mod markdown;
@@ -66,6 +68,26 @@ enum Command {
         /// (defaults to the input file's directory, or the cwd for stdin).
         #[arg(long)]
         resource_dir: Option<PathBuf>,
+    },
+    /// Write a VSD out as a Pandoc JSON AST (the reverse of pack-pandoc),
+    /// so `vsd export-pandoc x.vsd | pandoc -f json -o x.docx` reaches
+    /// every format Pandoc writes. Prints to stdout unless `-o` is given.
+    ExportPandoc {
+        file: PathBuf,
+        /// Output path for the JSON AST; omit to write stdout.
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+        /// Directory to write referenced images into (defaults to the
+        /// output's directory, or the cwd for stdout).
+        #[arg(long)]
+        asset_dir: Option<PathBuf>,
+    },
+    /// Write a VSD out as Typst source (`.typ`) for the Typst typesetting
+    /// ecosystem. Referenced images are written alongside the output.
+    ExportTypst {
+        file: PathBuf,
+        #[arg(short, long)]
+        output: PathBuf,
     },
     /// Show document identity, manifest, and store statistics.
     Info { file: PathBuf },
@@ -333,6 +355,12 @@ fn run() -> Result<()> {
             no_compress,
             resource_dir.as_deref(),
         ),
+        Command::ExportPandoc {
+            file,
+            output,
+            asset_dir,
+        } => export_pandoc_cmd(&file, output.as_deref(), asset_dir.as_deref()),
+        Command::ExportTypst { file, output } => export_typst_cmd(&file, &output),
         Command::Info { file } => info(&file),
         Command::Validate { file } => validate(&file),
         Command::Extract { file, format } => extract(&file, &format),
@@ -485,6 +513,50 @@ fn pack_pandoc(
         output.display(),
         doc.store.len(),
         doc.document_id()?
+    );
+    Ok(())
+}
+
+/// Write the binary assets a writer produced (image files) next to the
+/// output, into `dir`.
+fn write_assets(dir: &Path, assets: &[(String, Vec<u8>)]) -> Result<()> {
+    for (name, bytes) in assets {
+        std::fs::write(dir.join(name), bytes).with_context(|| format!("writing asset {name}"))?;
+    }
+    Ok(())
+}
+
+fn export_pandoc_cmd(file: &Path, output: Option<&Path>, asset_dir: Option<&Path>) -> Result<()> {
+    let vsd = load(file)?;
+    let out = export_pandoc::document_to_pandoc(&vsd.document)?;
+    let asset_base = asset_dir
+        .or_else(|| output.and_then(|p| p.parent()))
+        .unwrap_or(Path::new("."));
+    write_assets(asset_base, &out.assets)?;
+    match output {
+        Some(p) => {
+            std::fs::write(p, &out.content)?;
+            eprintln!(
+                "wrote Pandoc JSON AST → {} ({} image asset(s)); convert with `pandoc -f json …`",
+                p.display(),
+                out.assets.len()
+            );
+        }
+        None => print!("{}", out.content),
+    }
+    Ok(())
+}
+
+fn export_typst_cmd(file: &Path, output: &Path) -> Result<()> {
+    let vsd = load(file)?;
+    let out = export_typst::document_to_typst(&vsd.document)?;
+    std::fs::write(output, &out.content)?;
+    let dir = output.parent().unwrap_or(Path::new("."));
+    write_assets(dir, &out.assets)?;
+    println!(
+        "wrote Typst source → {} ({} image asset(s)); typeset with `typst compile`",
+        output.display(),
+        out.assets.len()
     );
     Ok(())
 }

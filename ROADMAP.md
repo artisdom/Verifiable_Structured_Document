@@ -518,9 +518,18 @@ Formats win when reading them is frictionless and producing them is one line.
       `Quoted` → smart quotes. Same discipline as the md/html on-ramps:
       image `alt` **required**, `RawBlock`/`RawInline`/notes dropped (no
       foreign content), TeX math kept as source text (no faithful MathML
-      conversion). ☐ A native Typst writer and a Pandoc *custom writer*
-      (the reverse direction) remain optional extras; the JSON-AST path
-      already covers the dozens-of-formats goal.
+      conversion). **The reverse direction shipped in v0.29** — two
+      writers emit VSD *out* into authoring ecosystems:
+      **`vsd export-pandoc`** ([`export_pandoc.rs`](crates/vsd-cli/src/export_pandoc.rs))
+      emits the pandoc-types 1.23 JSON AST, so
+      `vsd export-pandoc x.vsd | pandoc -f json -o x.docx` reaches **every
+      format Pandoc writes** (docx/html/rst/LaTeX/…); the round-trip
+      VSD→Pandoc-AST→VSD is exercised by test against the on-ramp.
+      **`vsd export-typst`** ([`export_typst.rs`](crates/vsd-cli/src/export_typst.rs))
+      emits Typst source (`.typ`) with images written alongside. Both
+      preserve figure `alt`, escape target-syntax metacharacters, and keep
+      MathML verbatim (RawInline html / a labelled `mathml` raw block)
+      rather than mis-converting it.
 - [◐] **4e. Form filling UX**: `vsd fill --interactive` — terminal prompts
       with **live constraint evaluation** (violations re-prompt with the
       reason, cross-field constraints react immediately, computed fields
@@ -746,6 +755,7 @@ core spec before a working prototype and an adversarial review.
 | **0.26** ✅ | Geometry PDF recovery | Untagged foreign PDFs: cluster positioned text (text matrix + font size, decoded per font encoding) into headings/paragraphs/columns — runs ahead of naive text recovery, still marked lossy. Closes 3c's richer-built-in tail. **Phase 3 complete bar JXL (3e), blocked externally** |
 | **0.27** ✅ | Pandoc on-ramp | `vsd pack-pandoc`: Pandoc JSON AST → VSD (headers/lists/tables/code/quotes/figures/links/inline styling), unlocking docx/rst/LaTeX/Org/EPUB/… through one importer; `alt` enforced, foreign content dropped. Closes ROADMAP 4d |
 | **0.28** ✅ | Browser text layer | `<vsd-doc>` overlays a transparent, selectable text layer (new `vsd_page_text` ABI returns per-run logical text + geometry; positioned in container-query units) → native browser select/copy on real text. Closes 4b's text-layer tail |
+| **0.29** ✅ | VSD → Pandoc / Typst | Reverse-direction writers: `vsd export-pandoc` (pandoc-types 1.23 JSON AST → docx/html/… via Pandoc; round-trips through the on-ramp) and `vsd export-typst` (Typst `.typ` source). Completes 4d both ways |
 | **1.0** | Freeze | Spec 1.0, two implementations, audit complete, ISO/W3C track |
 
 *Versioning policy:* the format major version and the crate versions decouple
