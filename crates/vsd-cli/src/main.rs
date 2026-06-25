@@ -1074,16 +1074,23 @@ fn import(file: &Path, output: &Path) -> Result<()> {
         vsd_pdf::ImportOutcome::Recovered {
             document,
             pages_read,
+            via,
         } => {
             let report = vsd_core::validate::validate(&document);
             print_findings(&report);
             write_file(output, &document, &[], &WriteOptions::default())?;
+            let how = if via.contains("tagged") {
+                "tagged-structure recovery (StructTreeRoot → content tree)"
+            } else {
+                "heuristic text recovery"
+            };
             println!(
-                "foreign PDF: heuristic structure recovery over {pages_read} page(s) → {}",
+                "foreign PDF: {how} over {pages_read} page(s) → {}",
                 output.display()
             );
             println!(
-                "marked format-migrated (lossy) in provenance; original PDF embedded as attachment"
+                "marked format-migrated (lossy, tool={via}) in provenance; \
+                 original PDF embedded as attachment"
             );
             println!("document id: {}", document.document_id()?);
         }

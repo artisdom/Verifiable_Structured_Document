@@ -41,7 +41,7 @@ derived; container as dumb transport. Each layer is independently verifiable.
 Phase 0  Foundations (canonical layer)        ████████████████████  SHIPPED (v0.1)
 Phase 1  Hardening & ecosystem hygiene        ███████████████████░  SHIPPED (v0.3) — crates.io publish awaits public repo
 Phase 2  The render layer (vsd-layout)        ████████████████████  SHIPPED (v0.5→0.22) — engines 1.0–1.11: faces, mono, underline, justification, bidi, hyphenation, widow/orphan, all shaped/complex scripts (Arabic→CJK→Tibetan/Khmer/Myanmar/Ethiopic), vertical text, PDF subsetting, section-level multi-column, and MathML Core layout; incremental relayout done — **Phase 2 complete**
-Phase 3  PDF interop (the adoption wedge)     ██████████████░░░░░░  SHIPPED (v0.7) — export + hybrid round-trip + md on-ramp; rich import (3b/3c) + JXL (3e) open
+Phase 3  PDF interop (the adoption wedge)     ████████████████░░░░  SHIPPED (v0.7→0.23) — export + hybrid round-trip + md on-ramp + foreign tagged-structure import (3b); only JXL (3e) + PDF/A + richer 3c built-ins open
 Phase 4  Viewing & authoring experience       ████████████░░░░░░░░  SHIPPED (v0.8) — vsd-view, <vsd-doc> WASM viewer, compose API, diff --html, interactive fill; bindings (4c) + Pandoc (4d) open
 Phase 5  Trust infrastructure at scale        █████████████████░░░  SHIPPED (v0.9→0.10) — salting (5f) + reference server (5e) now complete; full PKI (5a) + C2PA serialization (5c) open
 Phase 6  Standardization & governance         ███████████░░░░░░░░░  IN-REPO PARTS SHIPPED (v0.10) — spec consolidated, conformance program, governance docs, regulatory dossiers; external milestones (second impl, standards body) open by nature
@@ -395,11 +395,23 @@ be able to adopt VSD internally with **zero external-compatibility risk**.
       PDF embedded as an attachment for legal continuity and its hash
       recorded. ☐ Richer built-ins (column/table reconstruction,
       document-understanding models) slot into the trait later.
-- [◐] **3b. Tagged-PDF → VSD importer**: *hybrid* PDFs (ours) import
-      losslessly via the embedded source — identity verified, signatures
-      intact. ☐ Walking a foreign PDF's structure tree (StructTreeRoot →
-      content tree) is still open; foreign tagged PDFs currently take the
-      3c recovery path.
+- [x] **3b. Tagged-PDF → VSD importer** — closed in **v0.23**. *Hybrid*
+      PDFs (ours) import losslessly via the embedded source — identity
+      verified, signatures intact. **Foreign tagged PDFs now walk their
+      structure tree** ([`vsd-pdf/src/tagged.rs`](crates/vsd-pdf/src/tagged.rs)):
+      `StructTreeRoot` → `StructElem` nodes are mapped to a real semantic
+      content tree — `H1`–`H6`/`H` → headings with levels, `P` →
+      paragraphs, `L`/`LI`/`LBody` → lists (ordered per `ListNumbering`),
+      `Table`/`TR`/`TH`/`TD` → tables (header cells carry `Scope`),
+      `Sect`/`Art` → sections, `Code` → code — with each element's text
+      resolved from **marked content** (an MCID → text map decoded from
+      the page content streams through each font's encoding, the way
+      `lopdf`'s own extractor works). Still lossy (structure + text, not
+      exact layout) and marked `format-migrated`; a `Figure`'s pixels and
+      a `Formula`'s MathML aren't reconstructable, so their alt/text is
+      preserved rather than invented. Untagged PDFs still fall to the 3c
+      text-recovery path. Tested both via our own exporter's tagged output
+      (embed off) and a synthetic list/table PDF.
 - [x] **3d. Markdown → VSD** (`vsd pack notes.md`): CommonMark + tables via
       pulldown-cmark — headings, lists, code, tables, quotes, links,
       emphasis (style table), images (alt text required, enforced). HTML
@@ -681,6 +693,7 @@ core spec before a working prototype and an adversarial review.
 | **0.20** ✅ | PDF font subsetting | From-scratch deterministic, glyph-id-stable subsetter (TrueType `glyf` + CFF) in `vsd-pdf`; embeds only used glyphs; self-verified against the pinned ttf-parser with full-font fallback (can only shrink, never break); CJK PDFs roughly halve |
 | **0.21** ✅ | Engine 1.10 multi-column | Section-level multi-column layout via the additive format-0.6 `cols` attribute; sequential top-to-bottom, left-to-right column fill (`column-fill: auto`); single-column documents byte-identical to 1.9 (1.0–1.9 golden hashes unchanged); earlier engines refuse `cols > 1` |
 | **0.22** ✅ | Engine 1.11 MathML | MathML Core (subset) layout with the pinned STIX Two Math face + OpenType MATH table (super/subscripts, fractions, radicals, under/over, fences); unsupported MathML uses the fallback image or is refused; no format change (1.0–1.10 byte-identical). **Phase 2 complete** |
+| **0.23** ✅ | Foreign tagged-PDF import | `vsd-pdf` walks a foreign PDF's `StructTreeRoot` into a semantic content tree (headings/levels, paragraphs, lists, tables with header scope, sections, code), resolving per-element text from marked content (MCID → text decoded via each font's encoding); still marked `format-migrated`, original attached. Closes ROADMAP 3b |
 | **1.0** | Freeze | Spec 1.0, two implementations, audit complete, ISO/W3C track |
 
 *Versioning policy:* the format major version and the crate versions decouple
@@ -702,11 +715,12 @@ crates keep evolving.
   **stretchy fences** and **matrices** (`mtable`) in MathML, column-level
   widow/orphan and float/text-wrap, and rare/historic scripts (Mongolian,
   N'Ko, Adlam, Syriac).
-- **Want adoption?** Phase 3b's open half — walking a foreign tagged PDF's
-  structure tree into a content tree — or richer `StructureRecovery`
-  built-ins (columns, tables); the trait and pipeline already exist. A
-  poppler/pdfium golden-render CI job for exported PDFs is also up for
-  grabs.
+- **Want adoption?** Richer recovery for *untagged* foreign PDFs —
+  column/table reconstruction from text geometry, or a
+  document-understanding `StructureRecovery` built-in (the trait and
+  pipeline already exist; tagged PDFs are now handled by the 3b walker).
+  A poppler/pdfium golden-render CI job for exported PDFs, and PDF/A-2b
+  output, are also up for grabs.
 - **Want a moonshot?** §10.2 (`vsd-mcp`) is genuinely small — vsd-core
   already does verified extract/diff; it needs an MCP wrapper and a README
   that explains *why agents should refuse unsigned PDFs*.

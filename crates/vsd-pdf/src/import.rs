@@ -9,15 +9,22 @@
 //!    VSD → PDF → VSD is the identity function, cryptographically
 //!    checkable.
 //!
-//! 2. **Structure recovery (lossy, honest about it).** Foreign PDFs go
-//!    through a [`StructureRecovery`] strategy. The built-in
+//! 2. **Tagged-structure recovery (foreign tagged PDFs).** If the PDF
+//!    carries a logical structure tree (`StructTreeRoot`), it is walked
+//!    into a genuine semantic content tree — headings, paragraphs,
+//!    lists, tables — with per-element text resolved from marked content
+//!    (see [`crate::tagged`]). Still lossy (structure + text, not exact
+//!    layout) and marked as such.
+//!
+//! 3. **Text recovery (lossy, honest about it).** Untagged foreign PDFs
+//!    go through a [`StructureRecovery`] strategy. The built-in
 //!    [`TextRecovery`] extracts page text and rebuilds paragraphs —
-//!    deliberately naive; richer recoverers (tagged-structure walkers,
-//!    document-understanding models) plug in via the trait without
-//!    entering the trusted core. The output is marked
-//!    `format-migrated { lossy: true }` in its provenance chain and the
-//!    original PDF rides along as an attachment resource for legal
-//!    continuity.
+//!    deliberately naive; richer recoverers (document-understanding
+//!    models) plug in via the trait without entering the trusted core.
+//!
+//! Both recovery paths mark the result `format-migrated { lossy: true }`
+//! in its provenance chain, with the original PDF riding along as an
+//! attachment resource for legal continuity.
 
 use vsd_core::document::{Document, DocumentBuilder};
 use vsd_core::manifest::{
@@ -41,6 +48,9 @@ pub enum ImportOutcome {
     Recovered {
         document: Document,
         pages_read: usize,
+        /// Which recoverer produced it (the `tool` provenance claim):
+        /// the tagged-structure walker or a [`StructureRecovery`] name.
+        via: String,
     },
 }
 
@@ -113,7 +123,19 @@ pub fn import_pdf(bytes: &[u8], recovery: &dyn StructureRecovery) -> Result<Impo
         });
     }
 
-    // --- Path 2: structure recovery ----------------------------------------
+    // --- Path 2: foreign tagged-structure recovery -------------------------
+    // A tagged PDF (StructTreeRoot present) yields a real semantic tree.
+    if let Some(blocks) = crate::tagged::recover_tagged(&pdf) {
+        let pages_read = pdf.get_pages().len();
+        let document = assemble(&pdf, bytes, blocks, crate::tagged::TOOL)?;
+        return Ok(ImportOutcome::Recovered {
+            document,
+            pages_read,
+            via: crate::tagged::TOOL.into(),
+        });
+    }
+
+    // --- Path 3: naive text recovery ---------------------------------------
     let pages = pdf.get_pages();
     let mut page_texts = Vec::with_capacity(pages.len());
     for &num in pages.keys() {
@@ -121,7 +143,23 @@ pub fn import_pdf(bytes: &[u8], recovery: &dyn StructureRecovery) -> Result<Impo
     }
     let pages_read = page_texts.len();
     let blocks = recovery.recover(&page_texts);
+    let document = assemble(&pdf, bytes, blocks, recovery.name())?;
+    Ok(ImportOutcome::Recovered {
+        document,
+        pages_read,
+        via: recovery.name().into(),
+    })
+}
 
+/// Assemble a recovered document: wrap `blocks` in a doc root, attach the
+/// original PDF, record the `format-migrated` provenance (anchored to the
+/// recovered content root, naming the `tool` that produced it).
+fn assemble(
+    pdf: &lopdf::Document,
+    bytes: &[u8],
+    blocks: Vec<Node>,
+    tool: &str,
+) -> Result<Document> {
     let root = Node::Doc(Doc {
         lang: "und".into(), // language is unknowable from a foreign PDF
         dir: Direction::Ltr,
@@ -137,12 +175,12 @@ pub fn import_pdf(bytes: &[u8], recovery: &dyn StructureRecovery) -> Result<Impo
         data: bytes.to_vec(),
     };
 
-    let title = pdf_info_string(&pdf, b"Title");
-    let author = pdf_info_string(&pdf, b"Author");
+    let title = pdf_info_string(pdf, b"Title");
+    let author = pdf_info_string(pdf, b"Author");
 
     let mut builder = DocumentBuilder::new(root);
     let original_id = builder.add_object(original.to_value())?;
-    let document = builder
+    Ok(builder
         .metadata(Metadata {
             title,
             authors: author.into_iter().collect(),
@@ -164,7 +202,7 @@ pub fn import_pdf(bytes: &[u8], recovery: &dyn StructureRecovery) -> Result<Impo
                 kind: "format-migrated".into(),
                 claims: vec![
                     ("source".into(), "pdf".into()),
-                    ("tool".into(), recovery.name().into()),
+                    ("tool".into(), tool.into()),
                     ("lossy".into(), "true".into()),
                     (
                         "original-sha256-blake3".into(),
@@ -177,12 +215,7 @@ pub fn import_pdf(bytes: &[u8], recovery: &dyn StructureRecovery) -> Result<Impo
             }],
         })
         .profile(Profile::Core)
-        .build()?;
-
-    Ok(ImportOutcome::Recovered {
-        document,
-        pages_read,
-    })
+        .build()?)
 }
 
 /// Locate an embedded `.vsd` attachment via the catalog's

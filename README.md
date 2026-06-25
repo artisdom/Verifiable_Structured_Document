@@ -261,8 +261,12 @@ CLI.
   inside the exported PDF as an attachment, so `vsd import` recovers the
   exact original — same document id, signatures still verify. PDF becomes
   a transport, not a destination; the round trip is the identity function.
-- **Foreign-PDF import** via a pluggable `StructureRecovery` trait (naive
-  text recovery built in), always marked `format-migrated { lossy: true }`
+- **Foreign-PDF import**: a foreign **tagged** PDF has its `StructTreeRoot`
+  walked into a real semantic tree (headings with levels, paragraphs,
+  lists, tables with header scope, sections, code), with per-element text
+  resolved from marked content (MCID → text via each font's encoding);
+  untagged PDFs fall back to a pluggable `StructureRecovery` trait (naive
+  text recovery built in). Always marked `format-migrated { lossy: true }`
   in provenance with the original PDF embedded for legal continuity.
 - **Markdown on-ramp**: `vsd pack README.md` (CommonMark + tables); alt
   text on images enforced, HTML passthrough deliberately dropped.
@@ -471,9 +475,10 @@ CLI.
   mis-rendering it.
 - Python/TypeScript authoring bindings; Pandoc/Typst backends;
   viewer-integrated form filling; a browser text-selection layer.
-- PDF/A-2b export mode; foreign tagged-PDF structure-tree import; richer
-  recovery strategies (columns/tables); JPEG→JXL recompression (blocked on
-  a pure-Rust JXL encoder).
+- PDF/A-2b export mode; richer recovery strategies for *untagged* PDFs
+  (column/table reconstruction from text geometry); JPEG→JXL
+  recompression (blocked on a pure-Rust JXL encoder). (Foreign *tagged*
+  PDF structure-tree import shipped in v0.23.)
 - X.509 chain-path validation, revocation, RFC 3161 timestamps; C2PA
   JUMBF serialization.
 - External-by-nature: a second independent implementation, the standards

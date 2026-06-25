@@ -165,8 +165,10 @@ fn foreign_pdf_recovers_heuristically_with_provenance() {
         ImportOutcome::Recovered {
             document,
             pages_read,
+            via,
         } => {
             assert_eq!(pages_read, 1);
+            assert_eq!(via, "vsd-pdf/text-recovery", "untagged → text recovery");
             let report = vsd_core::validate::validate(&document);
             assert!(report.is_valid(), "findings: {:?}", report.findings);
 
@@ -251,6 +253,272 @@ fn simple_foreign_pdf(text: &str) -> Vec<u8> {
     let catalog_id = doc.add_object(dictionary! {
         "Type" => "Catalog",
         "Pages" => pages_id,
+    });
+    doc.trailer.set("Root", catalog_id);
+    let mut out = Vec::new();
+    doc.save_to(&mut out).unwrap();
+    out
+}
+
+/// A *foreign tagged* PDF made by our own exporter with the embedded
+/// source switched off: its StructTreeRoot must drive recovery (path 2),
+/// reconstructing headings (with levels) and paragraphs from the marked
+/// content — not the naive text path.
+#[test]
+fn foreign_tagged_pdf_recovers_structure() {
+    let doc = DocumentBuilder::new(Node::Doc(Doc {
+        lang: "en".into(),
+        dir: Direction::Ltr,
+        writing_mode: vsd_core::tree::WritingMode::Horizontal,
+        children: vec![
+            Node::Heading(Heading {
+                level: 1,
+                children: vec![Inline::Text("Annual Report".into())],
+            }),
+            Node::Para(Para {
+                children: vec![Inline::Text(
+                    "This is the opening paragraph of the report.".into(),
+                )],
+            }),
+            Node::Heading(Heading {
+                level: 2,
+                children: vec![Inline::Text("Summary".into())],
+            }),
+            Node::Para(Para {
+                children: vec![Inline::Text("A short summary follows here.".into())],
+            }),
+        ],
+    }))
+    .build()
+    .unwrap();
+
+    let pdf = export_pdf(
+        &doc,
+        None,
+        &ExportOptions {
+            embed_source: false,
+        },
+    )
+    .unwrap();
+
+    let ImportOutcome::Recovered { document, via, .. } = import_pdf(&pdf, &TextRecovery).unwrap()
+    else {
+        panic!("a foreign tagged PDF must take the recovery path, not lossless");
+    };
+    assert_eq!(via, "vsd-pdf/tagged-recovery", "tagged walker must run");
+
+    let Node::Doc(d) = document.root_node().unwrap() else {
+        panic!("doc root");
+    };
+    // Headings recovered with their levels, in order, interleaved with
+    // paragraphs carrying the source text.
+    let headings: Vec<(u8, String)> = d
+        .children
+        .iter()
+        .filter_map(|n| match n {
+            Node::Heading(h) => Some((h.level, inline_text(&h.children))),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        headings,
+        vec![(1, "Annual Report".to_string()), (2, "Summary".to_string())]
+    );
+    let text = vsd_core::extract::extract_text(&document).unwrap();
+    assert!(
+        text.contains("opening paragraph of the report"),
+        "text: {text}"
+    );
+    assert!(text.contains("short summary follows"), "text: {text}");
+
+    // Still honestly marked lossy, original attached.
+    let prov = document.provenance().unwrap().unwrap();
+    assert!(prov.assertions[0]
+        .claims
+        .iter()
+        .any(|(k, v)| k == "tool" && v == "vsd-pdf/tagged-recovery"));
+    assert!(vsd_core::validate::validate(&document).is_valid());
+}
+
+/// A synthetic foreign tagged PDF with real `L`/`LI` and
+/// `Table`/`TR`/`TH`/`TD` structure (which our own exporter does not
+/// emit) — exercises list and table reconstruction from marked content.
+#[test]
+fn foreign_tagged_pdf_recovers_lists_and_tables() {
+    let pdf = tagged_list_table_pdf();
+
+    let ImportOutcome::Recovered { document, via, .. } = import_pdf(&pdf, &TextRecovery).unwrap()
+    else {
+        panic!("tagged recovery expected");
+    };
+    assert_eq!(via, "vsd-pdf/tagged-recovery");
+
+    let Node::Doc(d) = document.root_node().unwrap() else {
+        panic!("doc root");
+    };
+    let list = d
+        .children
+        .iter()
+        .find_map(|n| match n {
+            Node::List(l) => Some(l),
+            _ => None,
+        })
+        .expect("a list was recovered");
+    assert_eq!(list.items.len(), 2, "two list items");
+    assert!(!list.ordered, "Disc numbering → unordered");
+    assert!(inline_text_of_block(&list.items[0][0]).contains("Apples"));
+    assert!(inline_text_of_block(&list.items[1][0]).contains("Oranges"));
+
+    let table = d
+        .children
+        .iter()
+        .find_map(|n| match n {
+            Node::Table(t) => Some(t),
+            _ => None,
+        })
+        .expect("a table was recovered");
+    assert_eq!(table.body.len(), 2, "two rows");
+    assert_eq!(table.body[0].cells.len(), 2, "two columns");
+    // The header row's cells carry header scope.
+    assert!(table.body[0].cells[0].scope.is_some(), "TH → scope");
+    assert!(table.body[1].cells[0].scope.is_none(), "TD → no scope");
+    let cell_text = inline_text_of_block(&table.body[0].cells[0].children[0]);
+    assert!(cell_text.contains("Name"), "header cell text: {cell_text}");
+    let body_text = inline_text_of_block(&table.body[1].cells[1].children[0]);
+    assert!(body_text.contains('7'), "body cell text: {body_text}");
+}
+
+fn inline_text(inls: &[Inline]) -> String {
+    inls.iter()
+        .map(|i| match i {
+            Inline::Text(t) => t.clone(),
+            _ => String::new(),
+        })
+        .collect()
+}
+
+fn inline_text_of_block(n: &Node) -> String {
+    match n {
+        Node::Para(p) => inline_text(&p.children),
+        _ => String::new(),
+    }
+}
+
+/// Hand-built tagged PDF: a Helvetica page whose six marked-content
+/// sequences feed an `L` (two `LI`) and a `Table` (a `TH` header row and
+/// a `TD` body row) in the structure tree.
+fn tagged_list_table_pdf() -> Vec<u8> {
+    use lopdf::content::{Content, Operation};
+    use lopdf::{dictionary, Object, Stream};
+
+    let mut doc = lopdf::Document::with_version("1.5");
+    let pages_id = doc.new_object_id();
+    let page_id = doc.new_object_id();
+
+    let font_id = doc.add_object(dictionary! {
+        "Type" => "Font", "Subtype" => "Type1", "BaseFont" => "Helvetica",
+    });
+    let resources_id = doc.add_object(dictionary! {
+        "Font" => dictionary! { "F1" => font_id },
+    });
+
+    // One marked-content sequence per MCID, each showing a literal.
+    let texts = ["Apples", "Oranges", "Name", "Qty", "Widget", "7"];
+    let mut ops = Vec::new();
+    let mut y = 700;
+    for (mcid, t) in texts.iter().enumerate() {
+        ops.push(Operation::new(
+            "BDC",
+            vec![
+                Object::Name(b"Span".to_vec()),
+                Object::Dictionary(dictionary! { "MCID" => mcid as i64 }),
+            ],
+        ));
+        ops.push(Operation::new("BT", vec![]));
+        ops.push(Operation::new("Tf", vec!["F1".into(), 12.into()]));
+        ops.push(Operation::new("Td", vec![72.into(), y.into()]));
+        ops.push(Operation::new("Tj", vec![Object::string_literal(*t)]));
+        ops.push(Operation::new("ET", vec![]));
+        ops.push(Operation::new("EMC", vec![]));
+        y -= 20;
+    }
+    let content_id = doc.add_object(Stream::new(
+        dictionary! {},
+        Content { operations: ops }.encode().unwrap(),
+    ));
+
+    // Leaf and grouping structure elements (children created first).
+    let mk = |doc: &mut lopdf::Document, s: &str, k: Object, with_pg: bool| {
+        let mut d = dictionary! { "Type" => "StructElem", "S" => s, "K" => k };
+        if with_pg {
+            d.set("Pg", page_id);
+        }
+        doc.add_object(d)
+    };
+    let mcid = |n: i64| Object::Integer(n);
+
+    let lb1 = mk(&mut doc, "LBody", mcid(0), true);
+    let li1 = mk(&mut doc, "LI", vec![lb1.into()].into(), false);
+    let lb2 = mk(&mut doc, "LBody", mcid(1), true);
+    let li2 = mk(&mut doc, "LI", vec![lb2.into()].into(), false);
+    let mut list_d = dictionary! {
+        "Type" => "StructElem", "S" => "L",
+        "K" => vec![li1.into(), li2.into()],
+    };
+    // ListNumbering attribute → unordered (Disc).
+    list_d.set(
+        "A",
+        dictionary! { "O" => "List", "ListNumbering" => "Disc" },
+    );
+    let list = doc.add_object(list_d);
+
+    let th1 = mk(&mut doc, "TH", mcid(2), true);
+    let th2 = mk(&mut doc, "TH", mcid(3), true);
+    let tr1 = mk(&mut doc, "TR", vec![th1.into(), th2.into()].into(), false);
+    let td1 = mk(&mut doc, "TD", mcid(4), true);
+    let td2 = mk(&mut doc, "TD", mcid(5), true);
+    let tr2 = mk(&mut doc, "TR", vec![td1.into(), td2.into()].into(), false);
+    let tbody = mk(
+        &mut doc,
+        "TBody",
+        vec![tr1.into(), tr2.into()].into(),
+        false,
+    );
+    let table = mk(&mut doc, "Table", vec![tbody.into()].into(), false);
+
+    let docelem = mk(
+        &mut doc,
+        "Document",
+        vec![list.into(), table.into()].into(),
+        false,
+    );
+    let struct_root = doc.add_object(dictionary! {
+        "Type" => "StructTreeRoot",
+        "K" => vec![docelem.into()],
+    });
+
+    doc.objects.insert(
+        page_id,
+        Object::Dictionary(dictionary! {
+            "Type" => "Page",
+            "Parent" => pages_id,
+            "Contents" => content_id,
+            "Resources" => resources_id,
+            "StructParents" => 0,
+            "MediaBox" => vec![0.into(), 0.into(), 612.into(), 792.into()],
+        }),
+    );
+    doc.objects.insert(
+        pages_id,
+        Object::Dictionary(dictionary! {
+            "Type" => "Pages", "Kids" => vec![page_id.into()], "Count" => 1,
+        }),
+    );
+    let catalog_id = doc.add_object(dictionary! {
+        "Type" => "Catalog",
+        "Pages" => pages_id,
+        "MarkInfo" => dictionary! { "Marked" => true },
+        "StructTreeRoot" => struct_root,
     });
     doc.trailer.set("Root", catalog_id);
     let mut out = Vec::new();
