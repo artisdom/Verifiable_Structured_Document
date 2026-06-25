@@ -275,11 +275,13 @@ CLI.
   `StructureRecovery` trait as the final fallback. Always marked
   `format-migrated { lossy: true }` in provenance with the original PDF
   embedded for legal continuity.
-- **Markdown & HTML on-ramps**: `vsd pack README.md` (CommonMark +
-  tables) and `vsd pack page.html` (a direct HTML importer — headings,
-  lists, tables with header scope, links, inline styling, code,
-  blockquotes, sections); alt text on images enforced,
-  scripts/styles/foreign content dropped.
+- **Markdown, HTML & Pandoc on-ramps**: `vsd pack README.md` (CommonMark +
+  tables), `vsd pack page.html` (a direct HTML importer — headings, lists,
+  tables with header scope, links, inline styling, code, blockquotes,
+  sections), and `pandoc paper.docx -t json | vsd pack-pandoc` (the
+  Pandoc JSON AST, unlocking docx/rst/LaTeX/Org/EPUB/… through one
+  importer); alt text on images enforced, scripts/styles/foreign content
+  dropped.
 - **`vsd migrate`**: batch directory conversion with the dedup report.
 
 **Implemented (v0.8, Phase 4 — viewing & authoring):**

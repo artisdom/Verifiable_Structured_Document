@@ -6,6 +6,7 @@ mod author;
 mod html;
 mod htmldiff;
 mod markdown;
+mod pandoc;
 mod serve;
 
 use std::path::{Path, PathBuf};
@@ -45,6 +46,26 @@ enum Command {
         /// Disable zstd compression of the object store.
         #[arg(long)]
         no_compress: bool,
+    },
+    /// Convert a Pandoc JSON AST (`pandoc -t json`) to a .vsd, unlocking
+    /// every format Pandoc reads (docx, rst, LaTeX, Org, EPUB, …). Reads
+    /// the AST from a file, or from stdin when no input is given.
+    PackPandoc {
+        /// Pandoc JSON AST file; omit (or `-`) to read stdin.
+        input: Option<PathBuf>,
+        /// Output .vsd path.
+        #[arg(short, long)]
+        output: PathBuf,
+        /// Conformance profile: core, archive, form, stream.
+        #[arg(long, default_value = "core")]
+        profile: String,
+        /// Disable zstd compression of the object store.
+        #[arg(long)]
+        no_compress: bool,
+        /// Base directory for resolving relative image paths
+        /// (defaults to the input file's directory, or the cwd for stdin).
+        #[arg(long)]
+        resource_dir: Option<PathBuf>,
     },
     /// Show document identity, manifest, and store statistics.
     Info { file: PathBuf },
@@ -299,6 +320,19 @@ fn run() -> Result<()> {
             profile,
             no_compress,
         } => pack(&input, &output, &profile, no_compress),
+        Command::PackPandoc {
+            input,
+            output,
+            profile,
+            no_compress,
+            resource_dir,
+        } => pack_pandoc(
+            input.as_deref(),
+            &output,
+            &profile,
+            no_compress,
+            resource_dir.as_deref(),
+        ),
         Command::Info { file } => info(&file),
         Command::Validate { file } => validate(&file),
         Command::Extract { file, format } => extract(&file, &format),
@@ -404,6 +438,51 @@ fn pack(input: &Path, output: &Path, profile: &str, no_compress: bool) -> Result
         "wrote {} ({} bytes, {} objects)\ndocument id: {}",
         output.display(),
         size,
+        doc.store.len(),
+        doc.document_id()?
+    );
+    Ok(())
+}
+
+fn pack_pandoc(
+    input: Option<&Path>,
+    output: &Path,
+    profile: &str,
+    no_compress: bool,
+    resource_dir: Option<&Path>,
+) -> Result<()> {
+    use std::io::Read as _;
+    let profile = Profile::parse(profile)?;
+    let stdin = input.is_none() || input == Some(Path::new("-"));
+    let text = if stdin {
+        let mut s = String::new();
+        std::io::stdin()
+            .read_to_string(&mut s)
+            .context("reading Pandoc JSON from stdin")?;
+        s
+    } else {
+        let p = input.unwrap();
+        std::fs::read_to_string(p).with_context(|| format!("reading {}", p.display()))?
+    };
+    // Resolve relative image paths against --resource-dir, else the input
+    // file's directory, else the cwd.
+    let base = resource_dir
+        .or_else(|| input.filter(|_| !stdin).and_then(|p| p.parent()))
+        .unwrap_or(Path::new("."));
+    let doc = pandoc::document_from_pandoc(&text, base, profile)?;
+
+    let report = vsd_core::validate::validate(&doc);
+    print_findings(&report);
+    if !report.is_valid() {
+        bail!("document failed validation; not writing output");
+    }
+    let opts = WriteOptions {
+        compress: !no_compress,
+    };
+    write_file(output, &doc, &[], &opts)?;
+    println!(
+        "wrote {} ({} objects) from Pandoc AST\ndocument id: {}",
+        output.display(),
         doc.store.len(),
         doc.document_id()?
     );

@@ -497,9 +497,22 @@ Formats win when reading them is frictionless and producing them is one line.
       `.h1().para().table().section()` chains, doc-tested). ☐ Python
       (`pyo3`) and TypeScript (napi/WASM) bindings remain open; they need
       their own packaging toolchains.
-- [ ] **4d. Typst/LaTeX/Pandoc backends**: emit VSD from existing authoring
-      ecosystems (a Pandoc writer alone unlocks dozens of input formats).
-      The Markdown on-ramp (3d) covers the most common case meanwhile.
+- [x] **4d. Pandoc on-ramp** — shipped in **v0.27**
+      ([`vsd-cli/src/pandoc.rs`](crates/vsd-cli/src/pandoc.rs)):
+      `pandoc paper.docx -t json | vsd pack-pandoc -o paper.vsd` consumes
+      Pandoc's JSON AST, so **every format Pandoc reads** (docx, rst,
+      LaTeX, Org, EPUB, MediaWiki, …) becomes a VSD on-ramp through one
+      importer. Maps headers (with level), paragraphs, bullet/ordered/
+      definition lists, the pandoc-types 1.23 table model (header cells
+      carry `Scope`, row/col spans preserved), code blocks (with
+      language), block quotes → sections, figures, links, and inline
+      styling (`Emph`/`Strong`/`Underline`/`Code` → the style table);
+      `Quoted` → smart quotes. Same discipline as the md/html on-ramps:
+      image `alt` **required**, `RawBlock`/`RawInline`/notes dropped (no
+      foreign content), TeX math kept as source text (no faithful MathML
+      conversion). ☐ A native Typst writer and a Pandoc *custom writer*
+      (the reverse direction) remain optional extras; the JSON-AST path
+      already covers the dozens-of-formats goal.
 - [◐] **4e. Form filling UX**: `vsd fill --interactive` — terminal prompts
       with **live constraint evaluation** (violations re-prompt with the
       reason, cross-field constraints react immediately, computed fields
@@ -723,6 +736,7 @@ core spec before a working prototype and an adversarial review.
 | **0.24** ✅ | PDF/A export | `vsd export --pdfa`: archival PDF/A-3b (with the embedded `.vsd`, à la ZUGFeRD) or PDF/A-2b — XMP `pdfaid`, sRGB OutputIntent (pinned ICC), trailer `/ID`, subset-tagged fonts with `/CIDSet`; deterministic. Closes 3a's PDF/A tail |
 | **0.25** ✅ | HTML on-ramp | `vsd pack page.html`: direct HTML → VSD importer (headings/lists/tables/links/inline styling/code/blockquote/sections), `alt` enforced, scripts/styles/foreign content dropped, entities decoded. Closes 3d's HTML tail |
 | **0.26** ✅ | Geometry PDF recovery | Untagged foreign PDFs: cluster positioned text (text matrix + font size, decoded per font encoding) into headings/paragraphs/columns — runs ahead of naive text recovery, still marked lossy. Closes 3c's richer-built-in tail. **Phase 3 complete bar JXL (3e), blocked externally** |
+| **0.27** ✅ | Pandoc on-ramp | `vsd pack-pandoc`: Pandoc JSON AST → VSD (headers/lists/tables/code/quotes/figures/links/inline styling), unlocking docx/rst/LaTeX/Org/EPUB/… through one importer; `alt` enforced, foreign content dropped. Closes ROADMAP 4d |
 | **1.0** | Freeze | Spec 1.0, two implementations, audit complete, ISO/W3C track |
 
 *Versioning policy:* the format major version and the crate versions decouple
