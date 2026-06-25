@@ -2293,3 +2293,126 @@ fn engine_1_10_multi_column_layout() {
         vsd_layout::layout_document(&plain, &opts.with_engine(EngineVersion::V1_10)).unwrap();
     assert_eq!(p_19, p_10, "single-column flow unchanged by engine 1.10");
 }
+
+/// Engine 1.11 lays out a `math` node's MathML with the pinned STIX Two
+/// Math face (index 24): the quadratic formula yields positioned glyph
+/// runs in that face plus rules (the fraction bar and the radical
+/// overbar). Earlier engines do not — they render the fallback image or
+/// the MathML source as a code block — and a document with no math node
+/// is byte-identical between 1.10 and 1.11.
+#[test]
+fn engine_1_11_mathml_layout() {
+    use vsd_core::layout::DisplayOp;
+    use vsd_core::tree::Math;
+    use vsd_layout::{EngineVersion, LayoutOptions, RecomputeOutcome};
+
+    // x = (-b ± √(b²−4ac)) / 2a
+    let mathml = "<math><mi>x</mi><mo>=</mo><mfrac>\
+        <mrow><mo>-</mo><mi>b</mi><mo>±</mo><msqrt>\
+        <mrow><msup><mi>b</mi><mn>2</mn></msup><mo>-</mo>\
+        <mn>4</mn><mi>a</mi><mi>c</mi></mrow></msqrt></mrow>\
+        <mrow><mn>2</mn><mi>a</mi></mrow></mfrac></math>";
+    let doc = DocumentBuilder::new(Node::Doc(Doc {
+        lang: "en".into(),
+        dir: Direction::Ltr,
+        writing_mode: vsd_core::tree::WritingMode::Horizontal,
+        children: vec![
+            Node::Heading(Heading {
+                level: 1,
+                children: vec![Inline::Text("The quadratic formula".into())],
+            }),
+            Node::Math(Math {
+                mathml: mathml.into(),
+                fallback: None,
+            }),
+        ],
+    }))
+    .build()
+    .unwrap();
+
+    let opts = LayoutOptions::default().with_engine(EngineVersion::V1_11);
+    assert_eq!(opts.engine.as_str(), "1.11.0");
+    let pages = vsd_layout::layout_document(&doc, &opts).unwrap();
+
+    let mut math_glyphs = 0usize;
+    let mut rules = 0usize;
+    for op in pages.iter().flat_map(|p| &p.ops) {
+        match op {
+            DisplayOp::GlyphRun { font, glyphs, .. } if *font == 24 => {
+                assert!(glyphs.iter().all(|g| g.gid != 0), "no .notdef in math");
+                math_glyphs += glyphs.len();
+            }
+            DisplayOp::Rect { .. } => rules += 1,
+            _ => {}
+        }
+    }
+    assert!(
+        math_glyphs >= 10,
+        "the formula has many glyphs in the math face"
+    );
+    assert!(rules >= 2, "fraction bar + radical overbar are rules");
+
+    // Cache pins 1.11.0 and recomputes byte-identically; raster + PDF
+    // accept the math face (a CFF font → FontFile3 path, subset-verified).
+    let laid = vsd_layout::add_render_cache(&doc, &opts).unwrap();
+    let cache = laid.render_cache().unwrap().unwrap();
+    assert_eq!(cache.engine_version, "1.11.0");
+    assert!(matches!(
+        vsd_layout::verify_render_cache(&laid).unwrap(),
+        RecomputeOutcome::Match { .. }
+    ));
+    let page = vsd_core::layout::Page::from_value(&laid.store.get_value(&cache.pages[0]).unwrap())
+        .unwrap();
+    assert!(!vsd_render::render_page_png(&laid, &page, 96.0)
+        .unwrap()
+        .is_empty());
+    assert!(
+        !vsd_pdf::export_pdf(&laid, None, &vsd_pdf::ExportOptions::default())
+            .unwrap()
+            .is_empty()
+    );
+
+    // Frozen contract: engine 1.10 does not lay out MathML — it has no
+    // math face (index 24) glyph run; the formula renders as a code block.
+    let pages_10 =
+        vsd_layout::layout_document(&doc, &opts.with_engine(EngineVersion::V1_10)).unwrap();
+    let any_math_10 = pages_10
+        .iter()
+        .flat_map(|p| &p.ops)
+        .any(|op| matches!(op, DisplayOp::GlyphRun { font, .. } if *font == 24));
+    assert!(!any_math_10, "engine 1.10 must not lay out MathML (frozen)");
+
+    // A document with no math node is byte-identical between 1.10 and 1.11.
+    let plain = DocumentBuilder::new(Node::Doc(Doc {
+        lang: "en".into(),
+        dir: Direction::Ltr,
+        writing_mode: vsd_core::tree::WritingMode::Horizontal,
+        children: vec![Node::Para(Para {
+            children: vec![Inline::Text("Plain body text, no mathematics here.".into())],
+        })],
+    }))
+    .build()
+    .unwrap();
+    let q_10 =
+        vsd_layout::layout_document(&plain, &opts.with_engine(EngineVersion::V1_10)).unwrap();
+    let q_11 =
+        vsd_layout::layout_document(&plain, &opts.with_engine(EngineVersion::V1_11)).unwrap();
+    assert_eq!(q_10, q_11, "non-math flow unchanged by engine 1.11");
+
+    // Unsupported MathML with no fallback is refused, not mis-rendered.
+    let exotic = DocumentBuilder::new(Node::Doc(Doc {
+        lang: "en".into(),
+        dir: Direction::Ltr,
+        writing_mode: vsd_core::tree::WritingMode::Horizontal,
+        children: vec![Node::Math(Math {
+            mathml: "<math><mtable><mtr><mtd><mn>1</mn></mtd></mtr></mtable></math>".into(),
+            fallback: None,
+        })],
+    }))
+    .build()
+    .unwrap();
+    assert!(matches!(
+        vsd_layout::layout_document(&exotic, &opts),
+        Err(vsd_layout::LayoutError::Unsupported(_))
+    ));
+}

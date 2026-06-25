@@ -40,7 +40,7 @@ derived; container as dumb transport. Each layer is independently verifiable.
 ```
 Phase 0  Foundations (canonical layer)        ████████████████████  SHIPPED (v0.1)
 Phase 1  Hardening & ecosystem hygiene        ███████████████████░  SHIPPED (v0.3) — crates.io publish awaits public repo
-Phase 2  The render layer (vsd-layout)        ████████████████████  SHIPPED (v0.5→0.21) — engines 1.0–1.10: faces, mono, underline, justification, bidi, hyphenation, widow/orphan, all shaped/complex scripts (Arabic→CJK→Tibetan/Khmer/Myanmar/Ethiopic), vertical text, PDF subsetting, and section-level multi-column; incremental relayout done; only 2j's MathML layout remains
+Phase 2  The render layer (vsd-layout)        ████████████████████  SHIPPED (v0.5→0.22) — engines 1.0–1.11: faces, mono, underline, justification, bidi, hyphenation, widow/orphan, all shaped/complex scripts (Arabic→CJK→Tibetan/Khmer/Myanmar/Ethiopic), vertical text, PDF subsetting, section-level multi-column, and MathML Core layout; incremental relayout done — **Phase 2 complete**
 Phase 3  PDF interop (the adoption wedge)     ██████████████░░░░░░  SHIPPED (v0.7) — export + hybrid round-trip + md on-ramp; rich import (3b/3c) + JXL (3e) open
 Phase 4  Viewing & authoring experience       ████████████░░░░░░░░  SHIPPED (v0.8) — vsd-view, <vsd-doc> WASM viewer, compose API, diff --html, interactive fill; bindings (4c) + Pandoc (4d) open
 Phase 5  Trust infrastructure at scale        █████████████████░░░  SHIPPED (v0.9→0.10) — salting (5f) + reference server (5e) now complete; full PKI (5a) + C2PA serialization (5c) open
@@ -326,19 +326,28 @@ forever against their pinned engine.
       needing a Type2 interpreter), multi-column, MathML, and
       rare/historic or special-handling scripts (Mongolian — itself
       vertical — N'Ko, Adlam, Syriac, …).
-- [◐] **2j. Advanced page layout** — **multi-column shipped (v0.21,
-      engine 1.10, [docs/LAYOUT-1.10.md](docs/LAYOUT-1.10.md))**:
-      **section-level multi-column layout** via the additive format-0.6
-      `cols` attribute on the section node. Content fills each column
-      top-to-bottom then left-to-right across the page region
-      (`column-fill: auto`; the last page is not balanced), then resumes
-      full-width flow below the deepest column. Single-column documents
-      are byte-identical to 1.9 (only `doc_id`s move under the 0.6 bump;
-      the 1.0–1.9 golden layout hashes are unchanged) and earlier engines
-      refuse `cols > 1` rather than collapse it to one column. ☐ Still
-      open: MathML layout (today math renders via its fallback image or
-      as code), and the genuinely-peripheral float/wrap and column-level
-      widow/orphan refinements.
+- [x] **2j. Advanced page layout** — **closed across v0.21–v0.22.**
+      **Multi-column (v0.21, engine 1.10,
+      [docs/LAYOUT-1.10.md](docs/LAYOUT-1.10.md))**: **section-level
+      multi-column layout** via the additive format-0.6 `cols` attribute
+      on the section node. Content fills each column top-to-bottom then
+      left-to-right across the page region (`column-fill: auto`; the last
+      page is not balanced), then resumes full-width flow below the
+      deepest column. Single-column documents are byte-identical to 1.9
+      (only `doc_id`s move under the 0.6 bump; the 1.0–1.9 golden layout
+      hashes are unchanged) and earlier engines refuse `cols > 1` rather
+      than collapse it. **MathML (v0.22, engine 1.11,
+      [docs/LAYOUT-1.11.md](docs/LAYOUT-1.11.md))**: real box-and-glue
+      **MathML Core (subset) layout** with the pinned **STIX Two Math**
+      face and its OpenType `MATH` table — super/subscripts, fractions,
+      radicals (growable √ from the MATH variants), under/over-scripts,
+      fenced expressions, math-italic identifiers, and an operator
+      dictionary for spacing. MathML outside the supported subset uses the
+      node's fallback image or is **refused**, never mis-rendered. No
+      format change — 1.0–1.10 are byte-identical (zero `doc_id` movement;
+      a new 1.11 vector only). ☐ Genuinely-peripheral remainders (not
+      gating 2j): inline math in running text, stretchy fences, matrices
+      (`mtable`), float/text-wrap, and column-level widow/orphan.
 - [x] **2g. Incremental relayout** (§13.2): `LayoutSession` — a fragment
       cache keyed by (block canonical bytes, position, width, engine
       version, inputs fingerprint), so block fragmentation (shaping +
@@ -671,6 +680,7 @@ core spec before a working prototype and an adversarial review.
 | **0.19** ✅ | Engine 1.9 remaining complex scripts | Tibetan (tsheg breaking) + Khmer/Myanmar (dictionary breaking) + Ethiopic, shaped by pinned rustybuzz; CJK punctuation/fullwidth routed to the pan-CJK face; version-gated style policy keeps 1.0–1.8 byte-identical; no format change |
 | **0.20** ✅ | PDF font subsetting | From-scratch deterministic, glyph-id-stable subsetter (TrueType `glyf` + CFF) in `vsd-pdf`; embeds only used glyphs; self-verified against the pinned ttf-parser with full-font fallback (can only shrink, never break); CJK PDFs roughly halve |
 | **0.21** ✅ | Engine 1.10 multi-column | Section-level multi-column layout via the additive format-0.6 `cols` attribute; sequential top-to-bottom, left-to-right column fill (`column-fill: auto`); single-column documents byte-identical to 1.9 (1.0–1.9 golden hashes unchanged); earlier engines refuse `cols > 1` |
+| **0.22** ✅ | Engine 1.11 MathML | MathML Core (subset) layout with the pinned STIX Two Math face + OpenType MATH table (super/subscripts, fractions, radicals, under/over, fences); unsupported MathML uses the fallback image or is refused; no format change (1.0–1.10 byte-identical). **Phase 2 complete** |
 | **1.0** | Freeze | Spec 1.0, two implementations, audit complete, ISO/W3C track |
 
 *Versioning policy:* the format major version and the crate versions decouple
@@ -684,11 +694,14 @@ crates keep evolving.
 - **Want maximum leverage now?** Grow the conformance corpus (`testdata/`)
   with adversarial vectors, or run long fuzz campaigns against the targets
   in `fuzz/` — the harnesses exist; depth is what's wanted.
-- **Want the hard problem?** Phase 2j — multi-column layout (needs a
-  `columns` block attribute and a column-aware flow) and MathML layout,
-  or extending shaping to CJK/Thai (CJK fonts + dictionary breaking),
-  all while keeping the determinism contract airtight; the 1.0→1.4
-  contracts (docs/LAYOUT-1.x.md) show the required rigor.
+- **Want the hard problem?** Phase 2 is complete (engines 1.0→1.11), so
+  the open layout work is now the genuinely-peripheral remainders, each a
+  new versioned engine increment held to the same determinism contract
+  (the 1.0→1.11 contracts in docs/LAYOUT-1.x.md show the required rigor):
+  **inline math** in running text (math integrated with line breaking),
+  **stretchy fences** and **matrices** (`mtable`) in MathML, column-level
+  widow/orphan and float/text-wrap, and rare/historic scripts (Mongolian,
+  N'Ko, Adlam, Syriac).
 - **Want adoption?** Phase 3b's open half — walking a foreign tagged PDF's
   structure tree into a content tree — or richer `StructureRecovery`
   built-ins (columns, tables); the trait and pipeline already exist. A

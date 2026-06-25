@@ -43,7 +43,7 @@ four properties that matter and removes the failure modes by construction:
 | [`vsd-core`](crates/vsd-core) | Deterministic CBOR (RFC 8949 §4.2, strict both ways) · content-addressed object store · content tree · manifest & profiles · validation · destructive redaction · forms + fill/flatten · object-set diff · render-layer types. `no_std + alloc` capable. |
 | [`vsd-container`](crates/vsd-container) | The `.vsd` chunk container: 32-byte header, BLAKE3-checksummed chunks, object index, signature blocks, trailer; zstd optional; lazy `StreamReader` for ranged access |
 | [`vsd-sign`](crates/vsd-sign) | Ed25519 signatures over document/subtree Merkle roots, with domain separation (wire format reserves `ecdsa-p256`, `ml-dsa-65`) |
-| [`vsd-layout`](crates/vsd-layout) | The reference layout engine (versions **1.0–1.10**, each an immutable contract): a deterministic projection from content tree to display lists — integer-µm arithmetic, twenty-four pinned Noto faces (incl. a full pan-CJK CFF face), horizontal **and vertical** (`vertical-rl`) writing, **section-level multi-column** layout, pinned hyphenation patterns + pinned shaper (rustybuzz) + pinned Unicode mirroring table + pinned ICU Thai/Lao/Khmer/Burmese dictionaries, normative contracts in [docs/LAYOUT-1.0.md](docs/LAYOUT-1.0.md)…[1.10.md](docs/LAYOUT-1.10.md) |
+| [`vsd-layout`](crates/vsd-layout) | The reference layout engine (versions **1.0–1.11**, each an immutable contract): a deterministic projection from content tree to display lists — integer-µm arithmetic, twenty-five pinned faces (twenty-four Noto incl. a full pan-CJK CFF face, plus **STIX Two Math** for MathML), horizontal **and vertical** (`vertical-rl`) writing, **section-level multi-column** layout, **MathML Core layout** (OpenType MATH table), pinned hyphenation patterns + pinned shaper (rustybuzz) + pinned Unicode mirroring table + pinned ICU Thai/Lao/Khmer/Burmese dictionaries, normative contracts in [docs/LAYOUT-1.0.md](docs/LAYOUT-1.0.md)…[1.11.md](docs/LAYOUT-1.11.md) |
 | [`vsd-render`](crates/vsd-render) | Rasterizer: display-list pages → PNG via tiny-skia, drawing with the same pinned font the engine measured with |
 | [`vsd-pdf`](crates/vsd-pdf) | PDF interop: deterministic **tagged** PDF export with the canonical `.vsd` embedded (hybrid PDF — round trips losslessly, verifiable by document id) and **from-scratch, self-verified font subsetting** (TrueType + CFF); import with hybrid recovery + pluggable structure recovery for foreign PDFs |
 | [`vsd-tlog`](crates/vsd-tlog) | Transparency log: RFC 6962-style Merkle tree over document ids — inclusion + consistency proofs, signed tree heads ("this contract existed, in exactly this form, at this time") |
@@ -443,12 +443,28 @@ CLI.
   0.6 bump; the 1.0–1.9 golden layout hashes are unchanged), and earlier
   engines **refuse** `cols > 1` rather than collapse it to one column.
 
+**Implemented (v0.22 — engine 1.11 MathML, Phase 2 complete):**
+
+- **MathML Core (subset) layout** ([docs/LAYOUT-1.11.md](docs/LAYOUT-1.11.md)):
+  a block-level `math` node is typeset with the pinned **STIX Two Math**
+  face and its OpenType `MATH` table — real super/subscripts, fractions,
+  radicals (a √ grown from the MATH vertical variants), under/over-scripts
+  and limits, fenced expressions, math-italic identifiers, and a small
+  operator dictionary for spacing. The parser is strict and
+  dependency-free; MathML outside the supported subset (matrices,
+  `mmultiscripts`, unknown elements/entities, missing glyphs) uses the
+  node's pre-rendered **fallback image** if present, otherwise is
+  **refused** — never mis-rendered. No format change: documents without
+  math are byte-identical to 1.10 (zero `doc_id` movement). Being a CFF
+  font, STIX embeds in PDF via the existing FontFile3/CIDFontType0 +
+  subsetting path.
+
 **Not yet implemented (the honest list):**
 
-- Layout engine widening (engine 1.11+): MathML layout (today math
-  renders via its fallback image or as code), and the genuinely
-  peripheral float/text-wrap, column-level widow/orphan, vertical tables
-  & tate-chu-yoko, and rare/historic or special-handling scripts
+- Layout engine widening (engine 1.12+, all genuinely peripheral): inline
+  math in running text, stretchy fences and matrices (`mtable`) in
+  MathML, column-level widow/orphan, float/text-wrap, vertical tables &
+  tate-chu-yoko, and rare/historic or special-handling scripts
   (Mongolian, N'Ko, Adlam, Syriac, …). CFF subr subsetting (a further PDF
   size win needing a Type2 charstring interpreter). The engine refuses or
   leaves on the Regular path what it cannot set faithfully rather than

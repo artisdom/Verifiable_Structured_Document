@@ -321,6 +321,25 @@ fn gen_vectors() -> Result<()> {
         "note": "engine 1.10 (LAYOUT-1.10.md): section-level multi-column layout via the format-0.6 'cols' attribute — content fills each column top-to-bottom then left-to-right across the page (column-fill: auto); earlier engines refuse cols>1 rather than collapse to one column",
     }));
 
+    // Engine 1.11: MathML Core (subset) layout with the pinned STIX Two
+    // Math face. No format change (the `math` node is unchanged).
+    let math = math_doc()?;
+    let opts_111 =
+        vsd_layout::LayoutOptions::default().with_engine(vsd_layout::EngineVersion::V1_11);
+    let laid_111 = vsd_layout::add_render_cache(&math, &opts_111)?;
+    let laid_111_bytes = write_document(&laid_111, &[], &WriteOptions { compress: false })?;
+    write(&valid.join("laid-out-1.11.vsd"), &laid_111_bytes)?;
+    let cache_111 = laid_111.render_cache()?.expect("cache present");
+    valid_entries.push(json!({
+        "file": "valid/laid-out-1.11.vsd",
+        "doc_id": laid_111.document_id()?.to_hex(),
+        "profile": "core",
+        "layout_engine": "vsd-layout/1.11.0",
+        "layout_hash": hex::encode(cache_111.layout_hash),
+        "layout_pages": cache_111.pages.len(),
+        "note": "engine 1.11 (LAYOUT-1.11.md): MathML Core (subset) layout with the pinned STIX Two Math face and its OpenType MATH table — real super/subscripts, fractions, radicals, under/over; unsupported MathML uses the fallback image or is refused; no format change, 1.0-1.10 hashes unchanged",
+    }));
+
     let (redacted, predecessor_id, proof) = redacted_doc()?;
     let red_bytes = write_document(&redacted, &[], &WriteOptions { compress: false })?;
     write(&valid.join("redacted.vsd"), &red_bytes)?;
@@ -943,6 +962,42 @@ fn multicol_doc() -> Result<Document> {
     Ok(DocumentBuilder::new(root)
         .metadata(Metadata {
             title: Some("VSD conformance: engine 1.10 multi-column layout".into()),
+            ..Default::default()
+        })
+        .build()?)
+}
+
+fn math_doc() -> Result<Document> {
+    // The quadratic formula: x = (-b ± √(b²−4ac)) / 2a — exercises
+    // fractions, a radical, a superscript, and binary operators.
+    let mathml = "<math><mi>x</mi><mo>=</mo><mfrac>\
+        <mrow><mo>-</mo><mi>b</mi><mo>±</mo><msqrt>\
+        <mrow><msup><mi>b</mi><mn>2</mn></msup><mo>-</mo>\
+        <mn>4</mn><mi>a</mi><mi>c</mi></mrow></msqrt></mrow>\
+        <mrow><mn>2</mn><mi>a</mi></mrow></mfrac></math>";
+    let root = Node::Doc(Doc {
+        lang: "en".into(),
+        dir: Direction::Ltr,
+        writing_mode: vsd_core::tree::WritingMode::Horizontal,
+        children: vec![
+            Node::Heading(Heading {
+                level: 1,
+                children: vec![Inline::Text("The quadratic formula".into())],
+            }),
+            Node::Para(Para {
+                children: vec![Inline::Text(
+                    "The roots of a quadratic equation are given by:".into(),
+                )],
+            }),
+            Node::Math(vsd_core::tree::Math {
+                mathml: mathml.into(),
+                fallback: None,
+            }),
+        ],
+    });
+    Ok(DocumentBuilder::new(root)
+        .metadata(Metadata {
+            title: Some("VSD conformance: engine 1.11 MathML layout".into()),
             ..Default::default()
         })
         .build()?)

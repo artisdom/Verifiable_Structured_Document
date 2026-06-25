@@ -22,6 +22,7 @@ pub mod dict;
 mod engine;
 pub mod font;
 pub mod hyphen;
+pub mod mathml;
 pub mod shape;
 mod text;
 
@@ -39,7 +40,7 @@ pub use engine::{
 pub const ENGINE_NAME: &str = "vsd-layout";
 /// The newest contract this build implements (older versions remain
 /// implemented forever: `EngineVersion::parse` lists them all).
-pub const ENGINE_VERSION: &str = "1.10.0";
+pub const ENGINE_VERSION: &str = "1.11.0";
 
 pub type Result<T> = std::result::Result<T, LayoutError>;
 

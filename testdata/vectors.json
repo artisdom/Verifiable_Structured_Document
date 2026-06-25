@@ -165,6 +165,15 @@
       "profile": "core"
     },
     {
+      "doc_id": "54e53f6c8a76cc47cfa06b56d138b9530752663ac4611260806840a6ac2429fc",
+      "file": "valid/laid-out-1.11.vsd",
+      "layout_engine": "vsd-layout/1.11.0",
+      "layout_hash": "10fb01c8b58e684a011f804e57130d28f8d26c4564bc177636c81610c836a82e",
+      "layout_pages": 1,
+      "note": "engine 1.11 (LAYOUT-1.11.md): MathML Core (subset) layout with the pinned STIX Two Math face and its OpenType MATH table — real super/subscripts, fractions, radicals, under/over; unsupported MathML uses the fallback image or is refused; no format change, 1.0-1.10 hashes unchanged",
+      "profile": "core"
+    },
+    {
       "doc_id": "efcd056db95dfe84f8a3d87c1cdb4fdb6e980898486deeffb71a4f88087f6f98",
       "file": "valid/redacted.vsd",
       "must_not_contain": "TOP-SECRET-ACCOUNT-9912",

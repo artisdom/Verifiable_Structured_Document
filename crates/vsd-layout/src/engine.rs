@@ -22,6 +22,8 @@ const MARGIN: i64 = 20_000;
 const SIZE_BODY: i64 = 3881;
 const SIZE_H: [i64; 6] = [8467, 6350, 4939, 4233, 3881, 3528];
 const SIZE_CODE: i64 = 3528;
+/// Base font size for display-math layout (engine 1.11), same as body.
+const SIZE_MATH: i64 = SIZE_BODY;
 const SIZE_CAPTION: i64 = 3175;
 const SPACE_AFTER: i64 = 2117;
 const SPACE_BEFORE_H: i64 = 4233;
@@ -103,6 +105,14 @@ pub enum EngineVersion {
     /// engines refuse `cols > 1` rather than mis-render. No change to any
     /// other behavior.
     V1_10,
+    /// LAYOUT-1.11.md — **MathML Core (subset) layout**: a `math` node's
+    /// MathML is laid out with the pinned STIX Two Math face and its
+    /// OpenType `MATH` table (real super/subscripts, fractions, radicals,
+    /// under/over-scripts, fences). MathML outside the supported subset
+    /// uses the node's pre-rendered fallback image if present, else is
+    /// refused. No other behavior changes; documents without `math` nodes
+    /// are byte-identical to 1.10.
+    V1_11,
 }
 
 impl EngineVersion {
@@ -119,6 +129,7 @@ impl EngineVersion {
             EngineVersion::V1_8 => "1.8.0",
             EngineVersion::V1_9 => "1.9.0",
             EngineVersion::V1_10 => "1.10.0",
+            EngineVersion::V1_11 => "1.11.0",
         }
     }
 
@@ -135,6 +146,7 @@ impl EngineVersion {
             "1.8.0" => Some(EngineVersion::V1_8),
             "1.9.0" => Some(EngineVersion::V1_9),
             "1.10.0" => Some(EngineVersion::V1_10),
+            "1.11.0" => Some(EngineVersion::V1_11),
             _ => None,
         }
     }
@@ -155,8 +167,11 @@ impl EngineVersion {
             | EngineVersion::V1_7
             | EngineVersion::V1_8 => crate::text::StylePolicy::V1_4,
             // 1.9 adds extended-script + CJK-punctuation face routing;
-            // 1.10 reuses it (multi-column changes flow, not styling).
-            EngineVersion::V1_9 | EngineVersion::V1_10 => crate::text::StylePolicy::V1_9,
+            // 1.10/1.11 reuse it (multi-column and MathML change layout,
+            // not the styled-text policy).
+            EngineVersion::V1_9 | EngineVersion::V1_10 | EngineVersion::V1_11 => {
+                crate::text::StylePolicy::V1_9
+            }
         }
     }
 
@@ -207,7 +222,8 @@ impl EngineVersion {
             | EngineVersion::V1_7
             | EngineVersion::V1_8
             | EngineVersion::V1_9
-            | EngineVersion::V1_10 => true,
+            | EngineVersion::V1_10
+            | EngineVersion::V1_11 => true,
         };
         shaped.then_some(f)
     }
@@ -244,7 +260,11 @@ impl EngineVersion {
     fn allows_cjk(self) -> bool {
         matches!(
             self,
-            EngineVersion::V1_7 | EngineVersion::V1_8 | EngineVersion::V1_9 | EngineVersion::V1_10
+            EngineVersion::V1_7
+                | EngineVersion::V1_8
+                | EngineVersion::V1_9
+                | EngineVersion::V1_10
+                | EngineVersion::V1_11
         )
     }
 
@@ -253,7 +273,7 @@ impl EngineVersion {
     fn vertical(self) -> bool {
         matches!(
             self,
-            EngineVersion::V1_8 | EngineVersion::V1_9 | EngineVersion::V1_10
+            EngineVersion::V1_8 | EngineVersion::V1_9 | EngineVersion::V1_10 | EngineVersion::V1_11
         )
     }
 
@@ -261,14 +281,24 @@ impl EngineVersion {
     /// Myanmar, Ethiopic) and CJK punctuation to their faces, with
     /// Tibetan tsheg line breaking.
     fn extended(self) -> bool {
-        matches!(self, EngineVersion::V1_9 | EngineVersion::V1_10)
+        matches!(
+            self,
+            EngineVersion::V1_9 | EngineVersion::V1_10 | EngineVersion::V1_11
+        )
     }
 
     /// Flow a section's content into multiple columns when its `cols`
     /// attribute is > 1 (engine 1.10+). Earlier engines refuse a
     /// multi-column section rather than mis-render it as a single column.
     fn columns(self) -> bool {
-        matches!(self, EngineVersion::V1_10)
+        matches!(self, EngineVersion::V1_10 | EngineVersion::V1_11)
+    }
+
+    /// Lay out a `math` node's MathML with the pinned math face (engine
+    /// 1.11+). Earlier engines render the node's fallback image, or its
+    /// MathML source as a code block.
+    fn mathml(self) -> bool {
+        matches!(self, EngineVersion::V1_11)
     }
 }
 
@@ -316,7 +346,7 @@ impl Default for LayoutOptions {
         LayoutOptions {
             page_width_um: 210_000,
             page_height_um: 297_000,
-            engine: EngineVersion::V1_10,
+            engine: EngineVersion::V1_11,
         }
     }
 }
@@ -1335,10 +1365,16 @@ impl Engine<'_> {
                 frag
             }
             Node::Code(c) => Frag::block(self.code_atoms(&c.text, x, path)?),
-            Node::Math(m) => match m.fallback {
-                Some(res) => Frag::block(vec![self.image_atom(res, x, width)?]),
-                None => Frag::block(self.code_atoms(&m.mathml, x, path)?),
-            },
+            Node::Math(m) => {
+                if self.opts.engine.mathml() {
+                    self.math_fragment(m, x, width, path)?
+                } else {
+                    match m.fallback {
+                        Some(res) => Frag::block(vec![self.image_atom(res, x, width)?]),
+                        None => Frag::block(self.code_atoms(&m.mathml, x, path)?),
+                    }
+                }
+            }
             Node::List(l) => Frag::block(self.list_atoms(l, path, x, width)?),
             Node::Table(t) => Frag::block(self.table_atoms(t, path, x, width)?),
             Node::Figure(f) => {
@@ -2238,6 +2274,77 @@ impl Engine<'_> {
             ops: vec![Op::Image { x, y: 0, w, h, res }],
             height: h,
         })
+    }
+
+    /// Lay out a `math` node (engine 1.11). Supported MathML is typeset
+    /// with the pinned math face; MathML outside the subset falls back to
+    /// the pre-rendered image if present, otherwise the refusal stands.
+    fn math_fragment(
+        &self,
+        m: &vsd_core::tree::Math,
+        x: i64,
+        width: i64,
+        path: &[u64],
+    ) -> Result<Frag> {
+        match crate::mathml::layout_math(&m.mathml, SIZE_MATH) {
+            Ok(ml) => Ok(Frag::block(vec![self.math_atom(&ml, x, width, path)])),
+            Err(LayoutError::Unsupported(msg)) => match m.fallback {
+                Some(res) => Ok(Frag::block(vec![self.image_atom(res, x, width)?])),
+                None => Err(LayoutError::Unsupported(msg)),
+            },
+            Err(e) => Err(e),
+        }
+    }
+
+    /// Turn a laid-out formula into one atom: glyphs and rules positioned
+    /// from the formula baseline, the formula centered in `width`, with a
+    /// little vertical breathing room above and below (display math).
+    fn math_atom(
+        &self,
+        ml: &crate::mathml::MathLayout,
+        x_left: i64,
+        width: i64,
+        path: &[u64],
+    ) -> Atom {
+        use crate::mathml::MathPrim;
+        let pad = SPACE_AFTER;
+        let baseline_from_top = pad + ml.ascent_um;
+        let height = baseline_from_top + ml.descent_um + pad;
+        let dx = if ml.width_um < width {
+            x_left + (width - ml.width_um) / 2
+        } else {
+            x_left
+        };
+        let mut ops = Vec::with_capacity(ml.prims.len());
+        for p in &ml.prims {
+            match *p {
+                MathPrim::Glyph { x, y, gid, size_um } => ops.push(Op::Glyphs {
+                    x: dx + x,
+                    baseline: baseline_from_top - y,
+                    size_um,
+                    face: Face::Math,
+                    color: BLACK,
+                    glyphs: vec![crate::shape::ShapedGlyph {
+                        gid,
+                        x_advance_um: 0,
+                        x_offset_um: 0,
+                        y_offset_um: 0,
+                        cluster: 0,
+                    }],
+                    text: String::new(),
+                    path: path.to_vec(),
+                    range: (0, 0),
+                }),
+                MathPrim::Rule { x, y, w, h } => ops.push(Op::Rect {
+                    x: dx + x,
+                    y: baseline_from_top - (y + h),
+                    w,
+                    h,
+                    color: BLACK,
+                }),
+            }
+        }
+        Atom { ops, height }
     }
 
     fn field_atom(&self, f: &vsd_core::tree::Field, x: i64, path: &[u64]) -> Result<Atom> {

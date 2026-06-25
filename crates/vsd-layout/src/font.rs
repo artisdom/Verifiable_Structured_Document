@@ -48,6 +48,11 @@ static FONT_TIBETAN: &[u8] = include_bytes!("../assets/NotoSerifTibetan-Regular.
 static FONT_KHMER: &[u8] = include_bytes!("../assets/NotoSansKhmer-Regular.ttf");
 static FONT_MYANMAR: &[u8] = include_bytes!("../assets/NotoSansMyanmar-Regular.ttf");
 static FONT_ETHIOPIC: &[u8] = include_bytes!("../assets/NotoSansEthiopic-Regular.ttf");
+// Engine 1.11 — STIX Two Math (LAYOUT-1.11.md §2), a CFF/OpenType math
+// font carrying a real OpenType `MATH` table. Used *only* by the MathML
+// layout path (`crate::mathml`); it is never in any script-routing map,
+// so it cannot change any frozen engine's output. SIL OFL 1.1.
+static FONT_MATH: &[u8] = include_bytes!("../assets/STIXTwoMath-Regular.otf");
 
 /// A face of the pinned family. Display lists carry the index in
 /// `TextRun::font` / `GlyphRun::font`. Engine 1.0 only ever emits
@@ -81,10 +86,13 @@ pub enum Face {
     Khmer = 21,
     Myanmar = 22,
     Ethiopic = 23,
+    /// STIX Two Math — used only by the MathML layout path (engine 1.11);
+    /// never routed by `for_char`/`shaped_for`, so it is freeze-neutral.
+    Math = 24,
 }
 
 impl Face {
-    pub const ALL: [Face; 24] = [
+    pub const ALL: [Face; 25] = [
         Face::Regular,
         Face::Bold,
         Face::Italic,
@@ -109,6 +117,7 @@ impl Face {
         Face::Khmer,
         Face::Myanmar,
         Face::Ethiopic,
+        Face::Math,
     ];
 
     pub fn index(self) -> u64 {
@@ -142,6 +151,7 @@ impl Face {
             21 => Face::Khmer,
             22 => Face::Myanmar,
             23 => Face::Ethiopic,
+            24 => Face::Math,
             _ => Face::Regular,
         }
     }
@@ -297,6 +307,7 @@ impl Face {
             Face::Khmer => FONT_KHMER,
             Face::Myanmar => FONT_MYANMAR,
             Face::Ethiopic => FONT_ETHIOPIC,
+            Face::Math => FONT_MATH,
         }
     }
 
@@ -326,6 +337,7 @@ impl Face {
             Face::Khmer => "NotoSansKhmer-Regular",
             Face::Myanmar => "NotoSansMyanmar-Regular",
             Face::Ethiopic => "NotoSansEthiopic-Regular",
+            Face::Math => "STIXTwoMath-Regular",
         }
     }
 }
@@ -369,7 +381,7 @@ pub struct FontMetrics {
     pub line_gap_units: i64,
 }
 
-static METRICS: OnceLock<[FontMetrics; 24]> = OnceLock::new();
+static METRICS: OnceLock<[FontMetrics; 25]> = OnceLock::new();
 
 impl FontMetrics {
     fn parse_face(bytes: &'static [u8]) -> FontMetrics {
@@ -383,7 +395,7 @@ impl FontMetrics {
         }
     }
 
-    fn all() -> &'static [FontMetrics; 24] {
+    fn all() -> &'static [FontMetrics; 25] {
         METRICS.get_or_init(|| Face::ALL.map(|f| Self::parse_face(f.bytes())))
     }
 

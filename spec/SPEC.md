@@ -228,7 +228,12 @@ engines are byte-identical; no format change), and `vsd-layout/1.10.0`
 multi-column layout** via the format-0.6 `cols` attribute — content fills
 each column top-to-bottom then left-to-right across the page
 (`column-fill: auto`); single-column documents are byte-identical to 1.9,
-and earlier engines refuse `cols > 1` rather than collapse it). Each engine version is
+and earlier engines refuse `cols > 1` rather than collapse it), and
+`vsd-layout/1.11.0` ([docs/LAYOUT-1.11.md](../docs/LAYOUT-1.11.md), adds
+**MathML Core (subset) layout** — a `math` node is typeset with the
+pinned STIX Two Math face and its OpenType `MATH` table; MathML outside
+the supported subset uses the node's fallback image or is refused; no
+format change, so 1.0–1.10 are byte-identical). Each engine version is
 frozen: the conformance corpus pins one golden vector per version and a
 conforming reader MUST reproduce all of them.
 
