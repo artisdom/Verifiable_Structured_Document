@@ -1,6 +1,6 @@
 //! PDF → VSD import (spec §11).
 //!
-//! Two paths, tried in order:
+//! Four paths, tried in order:
 //!
 //! 1. **Hybrid recovery (lossless, verifiable).** If the PDF carries an
 //!    embedded `source.vsd` attachment (as `vsd-pdf` exports do), the
@@ -18,8 +18,8 @@
 //!
 //! 3. **Geometry recovery (untagged foreign PDFs).** With no structure
 //!    tree, positioned text is clustered by layout into headings,
-//!    paragraphs, and columns (see [`crate::geometry`]) — heuristic but
-//!    better than naive line-grouping.
+//!    paragraphs, columns, and compact aligned tables (see
+//!    [`crate::geometry`]) — heuristic but better than naive line-grouping.
 //!
 //! 4. **Text recovery (final fallback).** If geometry finds no text, a
 //!    [`StructureRecovery`] strategy runs. The built-in [`TextRecovery`]
@@ -141,8 +141,8 @@ pub fn import_pdf(bytes: &[u8], recovery: &dyn StructureRecovery) -> Result<Impo
     }
 
     // --- Path 3: geometry-based recovery (untagged PDFs) -------------------
-    // Cluster positioned text into headings/paragraphs (and columns) from
-    // layout — better than naive line-grouping, still heuristic.
+    // Cluster positioned text into headings, paragraphs, columns, and tables
+    // from layout — better than naive line-grouping, still heuristic.
     if let Some(blocks) = crate::geometry::recover_geometry(&pdf) {
         let pages_read = pdf.get_pages().len();
         let document = assemble(&pdf, bytes, blocks, crate::geometry::TOOL)?;

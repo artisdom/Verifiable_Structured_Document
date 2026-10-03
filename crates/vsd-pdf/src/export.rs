@@ -795,7 +795,7 @@ fn embed_font(w: &mut PdfWriter, typeface: Face, gids: &BTreeMap<u16, char>, pdf
     // Widths for used glyphs (all pinned faces use upem = 1000 = PDF
     // glyph space). For the CID-keyed CFF the CID equals the GID.
     let mut w_array = String::new();
-    for (&gid, _) in gids.iter() {
+    for &gid in gids.keys() {
         let adv = metrics.advance_units(ttf_gid(gid));
         let _ = write!(w_array, "{gid} [{adv}] ");
     }

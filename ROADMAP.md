@@ -407,12 +407,17 @@ be able to adopt VSD internally with **zero external-compatibility risk**.
       (text matrix + font size, glyph bytes through each font's encoding)
       and **clusters by layout** — fragments → lines → paragraphs (split
       on vertical-gap jumps), larger-than-body fonts → headings, and a
-      clean vertical gutter → two columns read left-to-right. Heuristic
-      (no ground truth in an untagged PDF) so still marked lossy, but
-      strictly better than naive line-grouping and it never invents
-      content. Runs ahead of `TextRecovery`, which remains the final
-      fallback. ☐ Table reconstruction from ruling/cell geometry and
-      document-understanding models still slot into the trait later.
+      clean vertical gutter → columns read left-to-right. **Richer column
+      and table reconstruction is now implemented**: uneven/multiple columns,
+      staggered baselines, spanning titles/text separating column regions,
+      and compact aligned tables with three or more rows. Two-column tables
+      require repeated numeric values to avoid treating parallel prose as
+      cells; no header scope or cell spans are guessed. Heuristic (no ground
+      truth in an untagged PDF), still marked lossy, and runs ahead of
+      `TextRecovery`, which remains the final fallback. Tests cover reading
+      order, cell boundaries, stream-order independence, page breaks,
+      surrounding text, and ambiguous layouts. ☐ Ruling-aware/multiline/
+      merged-cell tables and document-understanding models remain open.
 - [x] **3b. Tagged-PDF → VSD importer** — closed in **v0.23**. *Hybrid*
       PDFs (ours) import losslessly via the embedded source — identity
       verified, signatures intact. **Foreign tagged PDFs now walk their
@@ -777,10 +782,12 @@ crates keep evolving.
   **stretchy fences** and **matrices** (`mtable`) in MathML, column-level
   widow/orphan and float/text-wrap, and rare/historic scripts (Mongolian,
   N'Ko, Adlam, Syriac).
-- **Want adoption?** Richer recovery for *untagged* foreign PDFs —
-  column/table reconstruction from text geometry, or a
-  document-understanding `StructureRecovery` built-in (the trait and
-  pipeline already exist; tagged PDFs are now handled by the 3b walker).
+- **Want adoption?** Column/table reconstruction from text geometry for
+  *untagged* foreign PDFs is implemented (3c): uneven columns, spanning
+  regions, and compact aligned tables. Next: ruling-aware, multiline, and
+  merged-cell tables, or a document-understanding `StructureRecovery`
+  built-in (the trait and pipeline already exist; tagged PDFs are handled
+  by the 3b walker).
   A poppler/pdfium golden-render CI job for exported PDFs, and PDF/A-2b
   output, are also up for grabs.
 - **Want a moonshot?** §10.2 (`vsd-mcp`) is genuinely small — vsd-core

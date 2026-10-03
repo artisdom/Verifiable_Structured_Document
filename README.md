@@ -271,8 +271,12 @@ CLI.
   resolved from marked content (MCID → text via each font's encoding).
   *Untagged* PDFs go through **geometry recovery** — positioned text
   clustered by layout into headings (by font size), paragraphs (by
-  vertical gaps), and columns (by a clean gutter) — with a naive
-  `StructureRecovery` trait as the final fallback. Always marked
+  vertical gaps), uneven columns (by gutters, with spanning titles and text
+  separating regions), and compact aligned tables. Tables require three or
+  more rows; two-column tables also need repeated numeric values in a column
+  to distinguish them from parallel prose. Header scope and merged cells
+  are not inferred. The `StructureRecovery` trait remains the final text
+  fallback. Always marked
   `format-migrated { lossy: true }` in provenance with the original PDF
   embedded for legal continuity.
 - **Markdown, HTML & Pandoc on-ramps**: `vsd pack README.md` (CommonMark +
@@ -492,7 +496,8 @@ CLI.
   mis-rendering it.
 - Python/TypeScript authoring bindings; Pandoc/Typst backends;
   viewer-integrated form filling; a browser text-selection layer.
-- Table reconstruction from ruling/cell geometry for untagged PDFs;
+- Ruling-aware, multiline, and merged-cell table recovery for untagged PDFs
+  (compact aligned tables and richer column recovery are implemented);
   JPEG→JXL recompression (blocked on a pure-Rust JXL encoder); a veraPDF
   golden-validation CI job for the `--pdfa` output. (Foreign tagged-PDF
   import shipped in v0.23, PDF/A export v0.24, the HTML on-ramp v0.25, and

@@ -12,8 +12,9 @@
 //!   travels inside the PDF as an attachment, so the round trip back to
 //!   VSD is the identity function, verifiable by document id.
 //! - **Import** ([`import_pdf`]): hybrid PDFs recover losslessly;
-//!   foreign PDFs go through pluggable [`StructureRecovery`] (the
-//!   built-in recoverer is deliberately naive text extraction), marked
+//!   foreign PDFs recover structure from tags or text geometry (headings,
+//!   paragraphs, columns, and tables), with pluggable [`StructureRecovery`]
+//!   as the final text fallback. Recovered documents are marked
 //!   `format-migrated { lossy: true }` in provenance with the original
 //!   PDF embedded for legal continuity.
 

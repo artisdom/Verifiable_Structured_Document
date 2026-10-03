@@ -264,6 +264,16 @@ fn inline_to_string(inls: &[Inline]) -> String {
 /// A foreign PDF (no structure tree) with a 24pt title and three 12pt
 /// body lines positioned absolutely — exercises geometry clustering.
 fn geometry_foreign_pdf() -> Vec<u8> {
+    positioned_foreign_pdf(&[vec![
+        (24, 72, 720, "Big Title"),
+        (12, 72, 690, "First body line of text."),
+        (12, 72, 676, "Second line same paragraph."),
+        (12, 72, 640, "A new paragraph after a gap."),
+    ]])
+}
+
+/// Deliberately untagged PDFs with content-stream order independent of layout.
+fn positioned_foreign_pdf(pages: &[Vec<(i64, i64, i64, &str)>]) -> Vec<u8> {
     use lopdf::content::{Content, Operation};
     use lopdf::{dictionary, Object, Stream};
 
@@ -275,37 +285,33 @@ fn geometry_foreign_pdf() -> Vec<u8> {
     let resources_id = doc.add_object(dictionary! {
         "Font" => dictionary! { "F1" => font_id },
     });
-    // (size, y, text) — line 1&2 are close (same paragraph), line 3 after
-    // a larger gap (new paragraph).
-    let lines: [(i64, i64, &str); 4] = [
-        (24, 720, "Big Title"),
-        (12, 690, "First body line of text."),
-        (12, 676, "Second line same paragraph."),
-        (12, 640, "A new paragraph after a gap."),
-    ];
-    let mut ops = vec![Operation::new("BT", vec![])];
-    for (size, y, text) in lines {
-        ops.push(Operation::new("Tf", vec!["F1".into(), size.into()]));
-        ops.push(Operation::new(
-            "Tm",
-            vec![1.into(), 0.into(), 0.into(), 1.into(), 72.into(), y.into()],
+    let mut kids = Vec::new();
+    for lines in pages {
+        let mut ops = vec![Operation::new("BT", vec![])];
+        for &(size, x, y, text) in lines {
+            ops.push(Operation::new("Tf", vec!["F1".into(), size.into()]));
+            ops.push(Operation::new(
+                "Tm",
+                vec![1.into(), 0.into(), 0.into(), 1.into(), x.into(), y.into()],
+            ));
+            ops.push(Operation::new("Tj", vec![Object::string_literal(text)]));
+        }
+        ops.push(Operation::new("ET", vec![]));
+        let content_id = doc.add_object(Stream::new(
+            dictionary! {},
+            Content { operations: ops }.encode().unwrap(),
         ));
-        ops.push(Operation::new("Tj", vec![Object::string_literal(text)]));
+        let page_id = doc.add_object(dictionary! {
+            "Type" => "Page", "Parent" => pages_id, "Contents" => content_id,
+            "Resources" => resources_id,
+            "MediaBox" => vec![0.into(), 0.into(), 612.into(), 792.into()],
+        });
+        kids.push(Object::Reference(page_id));
     }
-    ops.push(Operation::new("ET", vec![]));
-    let content_id = doc.add_object(Stream::new(
-        dictionary! {},
-        Content { operations: ops }.encode().unwrap(),
-    ));
-    let page_id = doc.add_object(dictionary! {
-        "Type" => "Page", "Parent" => pages_id, "Contents" => content_id,
-        "Resources" => resources_id,
-        "MediaBox" => vec![0.into(), 0.into(), 612.into(), 792.into()],
-    });
     doc.objects.insert(
         pages_id,
         Object::Dictionary(dictionary! {
-            "Type" => "Pages", "Kids" => vec![page_id.into()], "Count" => 1,
+            "Type" => "Pages", "Kids" => kids, "Count" => pages.len() as i64,
         }),
     );
     let catalog_id = doc.add_object(dictionary! { "Type" => "Catalog", "Pages" => pages_id });
@@ -313,6 +319,347 @@ fn geometry_foreign_pdf() -> Vec<u8> {
     let mut out = Vec::new();
     doc.save_to(&mut out).unwrap();
     out
+}
+
+fn recovered_blocks(bytes: &[u8]) -> Vec<Node> {
+    let ImportOutcome::Recovered { document, via, .. } = import_pdf(bytes, &TextRecovery).unwrap()
+    else {
+        panic!("expected geometry recovery")
+    };
+    assert_eq!(via, "vsd-pdf/geometry-recovery");
+    assert!(vsd_core::validate::validate(&document).is_valid());
+    let Node::Doc(root) = document.root_node().unwrap() else {
+        panic!("doc root")
+    };
+    root.children
+}
+
+#[test]
+fn untagged_tables_preserve_cells_and_surrounding_text() {
+    let pdf = positioned_foreign_pdf(&[vec![
+        (24, 72, 740, "Inventory"),
+        (12, 72, 710, "Available items are listed below."),
+        (12, 300, 660, "Qty"),
+        (12, 72, 660, "Name"),
+        (12, 300, 642, "7"),
+        (12, 72, 642, "Red"),
+        (12, 96, 643, "apples"),
+        (12, 72, 624, "Oranges"),
+        (12, 300, 624, "12"),
+        (12, 72, 590, "End of inventory."),
+    ]]);
+    let blocks = recovered_blocks(&pdf);
+    assert_eq!(blocks.len(), 4, "{blocks:?}");
+    assert!(matches!(&blocks[0], Node::Heading(h) if inline_text(&h.children) == "Inventory"));
+    assert_eq!(
+        inline_text_of_block(&blocks[1]),
+        "Available items are listed below."
+    );
+    let Node::Table(table) = &blocks[2] else {
+        panic!("table: {blocks:?}")
+    };
+    assert_eq!(table.cols.len(), 2);
+    assert!(table.head.is_empty() && table.foot.is_empty());
+    let texts: Vec<Vec<String>> = table
+        .body
+        .iter()
+        .map(|r| {
+            r.cells
+                .iter()
+                .map(|c| {
+                    assert!(c.scope.is_none() && c.span.is_none());
+                    inline_text_of_block(&c.children[0])
+                })
+                .collect()
+        })
+        .collect();
+    assert_eq!(
+        texts,
+        vec![
+            vec!["Name", "Qty"],
+            vec!["Red apples", "7"],
+            vec!["Oranges", "12"]
+        ]
+    );
+    assert_eq!(inline_text_of_block(&blocks[3]), "End of inventory.");
+
+    let ImportOutcome::Recovered {
+        document,
+        pages_read,
+        ..
+    } = import_pdf(&pdf, &TextRecovery).unwrap()
+    else {
+        unreachable!()
+    };
+    assert_eq!(pages_read, 1);
+    let prov = document.provenance().unwrap().unwrap();
+    assert!(prov.assertions[0]
+        .claims
+        .iter()
+        .any(|(k, v)| k == "lossy" && v == "true"));
+    // The recovered table survives canonical serialization and container reading.
+    let packed = write_document(&document, &[], &WriteOptions::default()).unwrap();
+    let read = vsd_container::read_document(&packed, &Default::default()).unwrap();
+    assert_eq!(
+        document.root_node().unwrap(),
+        read.document.root_node().unwrap()
+    );
+}
+
+#[test]
+fn tj_positioning_gaps_recover_cells_without_splitting_kerning() {
+    use lopdf::content::{Content, Operation};
+    use lopdf::Object;
+    let bytes = positioned_foreign_pdf(&[vec![]]);
+    let mut pdf = lopdf::Document::load_mem(&bytes).unwrap();
+    let page = *pdf.get_pages().get(&1).unwrap();
+    let content_id = pdf
+        .get_dictionary(page)
+        .unwrap()
+        .get(b"Contents")
+        .unwrap()
+        .as_reference()
+        .unwrap();
+    let mut ops = vec![
+        Operation::new("BT", vec![]),
+        Operation::new("Tf", vec!["F1".into(), 12.into()]),
+    ];
+    for (y, label, qty) in [
+        (700, "Name", "Qty"),
+        (682, "Apples", "7"),
+        (664, "Oranges", "12"),
+    ] {
+        ops.push(Operation::new(
+            "Tm",
+            vec![1.into(), 0.into(), 0.into(), 1.into(), 72.into(), y.into()],
+        ));
+        let gap = -((300 - 72 - label.len() as i64 * 6) * 1000 / 12);
+        // Tiny kerning between the first character and the rest must not add a space.
+        ops.push(Operation::new(
+            "TJ",
+            vec![Object::Array(vec![
+                Object::string_literal(&label[..1]),
+                5.into(),
+                Object::string_literal(&label[1..]),
+                gap.into(),
+                Object::string_literal(qty),
+            ])],
+        ));
+    }
+    ops.push(Operation::new("ET", vec![]));
+    pdf.get_object_mut(content_id)
+        .unwrap()
+        .as_stream_mut()
+        .unwrap()
+        .set_content(Content { operations: ops }.encode().unwrap());
+    let mut out = Vec::new();
+    pdf.save_to(&mut out).unwrap();
+    let blocks = recovered_blocks(&out);
+    let [Node::Table(table)] = blocks.as_slice() else {
+        panic!("{blocks:?}")
+    };
+    assert_eq!(table.body.len(), 3);
+    assert_eq!(
+        inline_text_of_block(&table.body[1].cells[0].children[0]),
+        "Apples"
+    );
+    assert_eq!(
+        inline_text_of_block(&table.body[2].cells[1].children[0]),
+        "12"
+    );
+}
+
+#[test]
+fn untagged_text_table_recovers_three_columns_and_page_boundaries() {
+    let mut rows = vec![];
+    for (y, cells) in [
+        (700, ["Name", "Colour", "Origin"]),
+        (682, ["Apples", "Red", "NZ"]),
+        (664, ["Oranges", "Orange", "AU"]),
+    ] {
+        for (x, text) in [72, 240, 420].into_iter().zip(cells) {
+            rows.push((12, x, y, text));
+        }
+    }
+    let blocks = recovered_blocks(&positioned_foreign_pdf(&[
+        rows.clone(),
+        vec![],
+        rows,
+        vec![],
+    ]));
+    assert!(matches!(
+        blocks.as_slice(),
+        [
+            Node::Table(_),
+            Node::PageBreakHint,
+            Node::PageBreakHint,
+            Node::Table(_)
+        ]
+    ));
+    let Node::Table(table) = &blocks[0] else {
+        unreachable!()
+    };
+    assert_eq!(table.body.len(), 3);
+    assert_eq!(table.cols.len(), 3);
+    assert_eq!(
+        inline_text_of_block(&table.body[2].cells[2].children[0]),
+        "AU"
+    );
+}
+
+#[test]
+fn uneven_columns_read_in_order_around_spanning_sections() {
+    let mut rows = vec![(24, 72, 740, "Report")];
+    for (y, left, right) in [
+        (
+            700,
+            "Left first sentence.",
+            "Right first sentence is considerably longer.",
+        ),
+        (
+            686,
+            "Left second sentence.",
+            "Right second sentence is considerably longer.",
+        ),
+        (
+            672,
+            "Left third sentence.",
+            "Right third sentence is considerably longer.",
+        ),
+        (
+            600,
+            "Left fourth sentence.",
+            "Right fourth sentence is considerably longer.",
+        ),
+        (
+            586,
+            "Left fifth sentence.",
+            "Right fifth sentence is considerably longer.",
+        ),
+        (
+            572,
+            "Left sixth sentence.",
+            "Right sixth sentence is considerably longer.",
+        ),
+    ] {
+        rows.push((12, 240, y, right));
+        rows.push((12, 72, y, left));
+    }
+    rows.push((18, 72, 640, "Section"));
+    rows.push((
+        12,
+        72,
+        530,
+        "A final full-width sentence spanning both recovered columns.",
+    ));
+    let blocks = recovered_blocks(&positioned_foreign_pdf(&[rows]));
+    assert_eq!(blocks.len(), 7, "{blocks:?}");
+    assert!(matches!(&blocks[0], Node::Heading(h) if inline_text(&h.children) == "Report"));
+    assert_eq!(
+        inline_text_of_block(&blocks[1]),
+        "Left first sentence. Left second sentence. Left third sentence."
+    );
+    assert!(inline_text_of_block(&blocks[2]).starts_with("Right first"));
+    assert!(matches!(&blocks[3], Node::Heading(h) if inline_text(&h.children) == "Section"));
+    assert!(inline_text_of_block(&blocks[4]).starts_with("Left fourth"));
+    assert!(inline_text_of_block(&blocks[5]).starts_with("Right fourth"));
+    assert!(inline_text_of_block(&blocks[6]).starts_with("A final full-width"));
+}
+
+#[test]
+fn short_parallel_prose_is_columns_not_a_table() {
+    let rows = vec![
+        (12, 72, 700, "Left one."),
+        (12, 300, 700, "Right one."),
+        (12, 72, 686, "Left two."),
+        (12, 300, 686, "Right two."),
+        (12, 72, 672, "Left three."),
+        (12, 300, 672, "Right three."),
+    ];
+    let blocks = recovered_blocks(&positioned_foreign_pdf(&[rows]));
+    assert_eq!(blocks.len(), 2, "{blocks:?}");
+    assert_eq!(
+        inline_text_of_block(&blocks[0]),
+        "Left one. Left two. Left three."
+    );
+    assert_eq!(
+        inline_text_of_block(&blocks[1]),
+        "Right one. Right two. Right three."
+    );
+}
+
+#[test]
+fn staggered_columns_do_not_require_shared_baselines() {
+    let rows = vec![
+        (12, 72, 700, "Left one."),
+        (12, 300, 693, "Right one."),
+        (12, 72, 685, "Left two."),
+        (12, 300, 678, "Right two."),
+        (12, 72, 670, "Left three."),
+        (12, 300, 663, "Right three."),
+    ];
+    let blocks = recovered_blocks(&positioned_foreign_pdf(&[rows]));
+    assert_eq!(blocks.len(), 2, "{blocks:?}");
+    assert_eq!(
+        inline_text_of_block(&blocks[0]),
+        "Left one. Left two. Left three."
+    );
+    assert_eq!(
+        inline_text_of_block(&blocks[1]),
+        "Right one. Right two. Right three."
+    );
+}
+
+#[test]
+fn three_prose_columns_are_independent_of_stream_order() {
+    let mut rows = Vec::new();
+    for y in [700, 686, 672] {
+        for (x, text) in [
+            (40, "First column has a long line."),
+            (240, "Middle column has a long line."),
+            (440, "Last column has a long line."),
+        ] {
+            rows.push((10, x, y, text));
+        }
+    }
+    let blocks = recovered_blocks(&positioned_foreign_pdf(&[rows.clone()]));
+    rows.reverse();
+    assert_eq!(blocks, recovered_blocks(&positioned_foreign_pdf(&[rows])));
+    assert_eq!(blocks.len(), 3, "{blocks:?}");
+    for (block, expected) in blocks.iter().zip(["First", "Middle", "Last"]) {
+        let text = inline_text_of_block(block);
+        assert!(text.starts_with(expected), "{text}");
+        assert_eq!(text.matches("long line.").count(), 3);
+    }
+}
+
+#[test]
+fn insufficient_or_misaligned_rows_do_not_invent_a_table() {
+    for rows in [
+        vec![
+            (12, 72, 700, "Name"),
+            (12, 300, 700, "Qty"),
+            (12, 72, 682, "Apples"),
+            (12, 300, 682, "7"),
+        ],
+        vec![
+            (12, 72, 700, "Name"),
+            (12, 300, 700, "Qty"),
+            (12, 72, 682, "Apples"),
+            (12, 300, 682, "7"),
+            (12, 72, 664, "Oranges"),
+            (12, 340, 664, "12"),
+        ],
+    ] {
+        let blocks = recovered_blocks(&positioned_foreign_pdf(&[rows]));
+        assert!(!blocks.iter().any(|n| matches!(n, Node::Table(_))));
+        let text = blocks
+            .iter()
+            .map(inline_text_of_block)
+            .collect::<Vec<_>>()
+            .join(" ");
+        assert!(text.contains("Apples") && text.contains('7'), "{text}");
+    }
 }
 
 /// Minimal foreign PDF via lopdf (Helvetica, uncompressed content).

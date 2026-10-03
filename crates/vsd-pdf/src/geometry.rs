@@ -4,10 +4,17 @@
 //! precisely. We decode each page's content stream into positioned text
 //! fragments (tracking the text matrix and font size, decoding glyph
 //! bytes through each font's encoding like `lopdf`'s extractor), then
-//! cluster them: fragments on the same baseline become a line, lines
-//! separated by a normal leading become a paragraph, a larger-than-body
-//! font marks a heading, and a clear vertical gutter splits a page into
-//! columns read left-to-right.
+//! cluster them: aligned compact cells become tables, clear vertical gutters
+//! separate columns read left-to-right, and spanning titles or text divide
+//! column regions. Remaining baseline rows become lines and paragraphs;
+//! larger-than-body fonts mark headings.
+//!
+//! Tables require at least three aligned rows with short cells (up to 24
+//! characters); two-column tables also require repeated numeric values in
+//! one column. Ambiguous layouts fall through to prose recovery. Header scope,
+//! merged/empty cells, multiline cells, and ruling lines are not inferred.
+//! Text advances remain approximate; rotated text and Form XObjects are not
+//! handled by this extractor.
 //!
 //! This is **heuristic** — there is no ground truth in an untagged PDF —
 //! so the result is still marked `format-migrated { lossy: true }`. It is
@@ -20,13 +27,14 @@
 use lopdf::{Document as Pdf, Encoding, Object, ObjectId};
 use std::collections::BTreeMap;
 
-use vsd_core::tree::{Inline, Node, Para};
+use vsd_core::tree::{Cell, ColSpec, Inline, Node, Para, Row, Table};
 
 /// Short identifier recorded in the import provenance `tool` claim.
 pub const TOOL: &str = "vsd-pdf/geometry-recovery";
 
 /// A shown piece of text with its page position and effective size, all
 /// in PDF user-space points (y grows up).
+#[derive(Clone)]
 struct Fragment {
     x: f64,
     y: f64,
@@ -155,21 +163,32 @@ fn page_fragments(pdf: &Pdf, page_id: ObjectId) -> Vec<Fragment> {
             }
             "TJ" => {
                 if let (Some(enc), Some(Object::Array(arr))) = (enc, a.first()) {
-                    let start_x = tm_x;
+                    let mut start_x = tm_x;
                     let mut text = String::new();
                     for el in arr {
                         match el {
                             Object::String(bytes, _) => {
                                 if let Ok(t) = Pdf::decode_text(enc, bytes) {
+                                    tm_x += est_width(&t, fs * scale);
                                     text.push_str(&t);
                                 }
-                                tm_x += est_width(
-                                    &Pdf::decode_text(enc, bytes).unwrap_or_default(),
-                                    fs * scale,
-                                );
                             }
                             Object::Integer(_) | Object::Real(_) => {
-                                tm_x += -num(el) / 1000.0 * fs * scale;
+                                let advance = -num(el) / 1000.0 * fs * scale;
+                                tm_x += advance;
+                                // Large positive adjustments separate cells/columns;
+                                // ordinary kerning stays within the same text run.
+                                if advance > fs.abs() * scale * 1.5 && !text.trim().is_empty() {
+                                    out.push(Fragment {
+                                        x: start_x,
+                                        y: tm_y,
+                                        size: fs * scale,
+                                        text: std::mem::take(&mut text),
+                                    });
+                                    start_x = tm_x;
+                                } else if text.is_empty() {
+                                    start_x = tm_x;
+                                }
                             }
                             _ => {}
                         }
@@ -224,67 +243,273 @@ struct Line {
     size: f64,
 }
 
+/// Preserve baseline rows until tables and column regions have been identified.
+/// Joining an entire baseline first would erase the boundaries between cells.
 fn page_blocks(frags: Vec<Fragment>) -> Vec<Node> {
-    if frags.is_empty() {
+    let rows = group_rows(frags);
+    if rows.is_empty() {
         return Vec::new();
     }
-    // Conservative column split: if a clear vertical gutter separates the
-    // fragments into left/right bands, recover each column in order.
-    if let Some((left, right)) = split_columns(&frags) {
-        let mut out = page_blocks(left);
-        out.extend(page_blocks(right));
-        return out;
+    let body = median_size(&rows.iter().cloned().map(row_line).collect::<Vec<_>>());
+    let mut out = Vec::new();
+    let mut pending = Vec::new();
+    let mut i = 0;
+    while i < rows.len() {
+        let (end, table) = recover_table(&rows, i);
+        if let Some(table) = table {
+            out.extend(column_blocks(std::mem::take(&mut pending), body, 0));
+            out.push(table);
+        } else {
+            pending.extend_from_slice(&rows[i..end]);
+        }
+        i = end;
     }
-
-    let lines = group_lines(frags);
-    lines_to_blocks(lines)
+    out.extend(column_blocks(pending, body, 0));
+    out
 }
 
-/// Group fragments into text lines by baseline proximity.
-fn group_lines(mut frags: Vec<Fragment>) -> Vec<Line> {
-    // Top-to-bottom (y descending), then left-to-right.
-    frags.sort_by(|a, b| {
-        b.y.partial_cmp(&a.y)
-            .unwrap_or(std::cmp::Ordering::Equal)
-            .then(a.x.partial_cmp(&b.x).unwrap_or(std::cmp::Ordering::Equal))
-    });
-    let mut lines: Vec<Line> = Vec::new();
+fn group_rows(mut frags: Vec<Fragment>) -> Vec<Vec<Fragment>> {
+    frags.retain(|f| f.x.is_finite() && f.y.is_finite() && f.size.is_finite());
+    frags.sort_by(|a, b| b.y.total_cmp(&a.y).then(a.x.total_cmp(&b.x)));
+    let mut rows: Vec<Vec<Fragment>> = Vec::new();
     for f in frags {
-        if let Some(last) = lines.last_mut() {
-            // Same line if the baseline is within half the line's size.
-            if (last.y - f.y).abs() <= last.size.max(f.size) * 0.5 {
-                // Insert a space if there's a horizontal gap.
-                if !last.text.ends_with(' ') && !f.text.starts_with(' ') {
-                    last.text.push(' ');
-                }
+        if let Some(row) = rows.last_mut() {
+            let first = &row[0];
+            if (first.y - f.y).abs() <= first.size.max(f.size) * 0.35 {
+                row.push(f);
+                continue;
+            }
+        }
+        rows.push(vec![f]);
+    }
+    for row in &mut rows {
+        row.sort_by(|a, b| a.x.total_cmp(&b.x));
+    }
+    rows
+}
+
+/// Merge adjacent text runs, leaving wide horizontal gaps as cell boundaries.
+fn row_cells(row: &[Fragment]) -> Vec<Fragment> {
+    let mut cells: Vec<Fragment> = Vec::new();
+    for f in row {
+        if let Some(last) = cells.last_mut() {
+            let gap = f.x - (last.x + est_width(&last.text, last.size));
+            if gap <= last.size.max(f.size) * 1.5 {
+                last.text.push(' ');
                 last.text.push_str(&f.text);
                 last.size = last.size.max(f.size);
                 continue;
             }
         }
-        lines.push(Line {
-            text: f.text.clone(),
-            x: f.x,
-            y: f.y,
-            size: f.size,
-        });
+        cells.push(f.clone());
     }
-    for l in &mut lines {
-        l.text = collapse(&l.text);
+    for cell in &mut cells {
+        cell.text = collapse(&cell.text);
     }
-    lines.retain(|l| !l.text.trim().is_empty());
-    lines
+    cells
+}
+
+/// Require at least three compact, consistently aligned rows. Two-column
+/// tables additionally need repeated numeric values in a column: short parallel
+/// prose is otherwise indistinguishable from a borderless table. Do not infer
+/// header scope, spans, or empty cells from geometry alone.
+fn recover_table(rows: &[Vec<Fragment>], start: usize) -> (usize, Option<Node>) {
+    let first = row_cells(&rows[start]);
+    let compact = |cells: &[Fragment]| {
+        cells.len() >= 2
+            && cells
+                .iter()
+                .all(|c| c.size > 0.0 && c.text.chars().count() <= 24)
+    };
+    if !compact(&first) {
+        return (start + 1, None);
+    }
+    let mut cells = vec![first];
+    let mut end = start + 1;
+    while end < rows.len() {
+        let next = row_cells(&rows[end]);
+        let prev = &cells[cells.len() - 1];
+        let gap = prev[0].y - next[0].y;
+        if !compact(&next)
+            || next.len() != cells[0].len()
+            || gap <= 0.0
+            || gap > prev[0].size.max(next[0].size) * 2.5
+            || next.iter().zip(&cells[0]).any(|(a, b)| {
+                (a.x - b.x).abs() > a.size.max(b.size) * 0.5
+                    || (a.size - b.size).abs() > b.size * 0.25
+            })
+        {
+            break;
+        }
+        cells.push(next);
+        end += 1;
+    }
+    if cells.len() < 3 {
+        return (end, None);
+    }
+    if cells[0].len() == 2
+        && !(0..2).any(|col| {
+            cells
+                .iter()
+                .filter(|row| numeric_cell(&row[col].text))
+                .count()
+                >= 2
+        })
+    {
+        return (end, None);
+    }
+    let cols = (0..cells[0].len())
+        .map(|_| ColSpec { width: None })
+        .collect();
+    let body = cells
+        .into_iter()
+        .map(|row| Row {
+            cells: row
+                .into_iter()
+                .map(|c| Cell {
+                    span: None,
+                    scope: None,
+                    children: vec![Node::Para(Para {
+                        children: vec![Inline::Text(c.text)],
+                    })],
+                })
+                .collect(),
+        })
+        .collect();
+    (
+        end,
+        Some(Node::Table(Table {
+            cols,
+            head: vec![],
+            body,
+            foot: vec![],
+        })),
+    )
+}
+
+fn numeric_cell(text: &str) -> bool {
+    text.chars().any(|c| c.is_ascii_digit())
+        && text.chars().all(|c| {
+            c.is_ascii_digit()
+                || c.is_whitespace()
+                || matches!(c, '.' | ',' | '-' | '+' | '%' | '$' | '€' | '£' | '(' | ')')
+        })
+}
+
+fn column_blocks(rows: Vec<Vec<Fragment>>, body: f64, depth: usize) -> Vec<Node> {
+    // Bound recursion for malicious pages with hundreds of apparent columns.
+    if depth >= 16 {
+        return lines_to_blocks(rows.into_iter().map(row_line).collect(), body);
+    }
+    let Some(cut) = column_cut(&rows) else {
+        return lines_to_blocks(rows.into_iter().map(row_line).collect(), body);
+    };
+    let mut out = Vec::new();
+    let mut band = Vec::new();
+    let mut spanning = Vec::new();
+    for row in rows {
+        let crosses = row
+            .iter()
+            .any(|f| f.x < cut && f.x + est_width(&f.text, f.size) > cut);
+        let heading = row.len() == 1 && row[0].size >= body * 1.25;
+        if crosses || heading {
+            out.extend(split_band(std::mem::take(&mut band), cut, body, depth));
+            spanning.push(row_line(row));
+        } else {
+            out.extend(lines_to_blocks(std::mem::take(&mut spanning), body));
+            band.push(row);
+        }
+    }
+    out.extend(split_band(band, cut, body, depth));
+    out.extend(lines_to_blocks(spanning, body));
+    out
+}
+
+fn split_band(rows: Vec<Vec<Fragment>>, cut: f64, body: f64, depth: usize) -> Vec<Node> {
+    let (left, right): (Vec<_>, Vec<_>) = rows.into_iter().flatten().partition(|f| f.x < cut);
+    // Recurse to recover three or more columns, always partitioning every run.
+    let mut out = column_blocks(group_rows(left), body, depth + 1);
+    out.extend(column_blocks(group_rows(right), body, depth + 1));
+    out
+}
+
+/// Search actual gaps rather than the page midpoint, allowing unequal widths.
+/// Require at least three baselines in each column; baselines may be staggered. Spanning rows are handled as separators by `column_blocks`.
+fn column_cut(rows: &[Vec<Fragment>]) -> Option<f64> {
+    let mut candidates = Vec::new();
+    for row in rows {
+        for pair in row.windows(2) {
+            let end = pair[0].x + est_width(&pair[0].text, pair[0].size);
+            if pair[1].x - end > pair[0].size.max(pair[1].size) * 2.0 {
+                candidates.push((end + pair[1].x) / 2.0);
+            }
+        }
+    }
+    let mut edges: Vec<f64> = rows
+        .iter()
+        .flatten()
+        .flat_map(|f| [f.x, f.x + est_width(&f.text, f.size)])
+        .collect();
+    edges.sort_by(f64::total_cmp);
+    edges.dedup_by(|a, b| (*a - *b).abs() < 1.0);
+    for pair in edges.windows(2) {
+        if pair[1] - pair[0] > 24.0 {
+            candidates.push((pair[0] + pair[1]) / 2.0);
+        }
+    }
+    candidates.sort_by(f64::total_cmp);
+    candidates.dedup_by(|a, b| (*a - *b).abs() < 1.0);
+    // Bound candidate evaluation on unusually fragmented foreign pages.
+    let step = candidates.len().div_ceil(128).max(1);
+    candidates
+        .into_iter()
+        .step_by(step)
+        .filter_map(|cut| {
+            let mut left_rows = 0;
+            let mut right_rows = 0;
+            let mut crossing = 0;
+            for row in rows {
+                let left = row.iter().any(|f| f.x + est_width(&f.text, f.size) <= cut);
+                let right = row.iter().any(|f| f.x >= cut);
+                if row
+                    .iter()
+                    .any(|f| f.x < cut && f.x + est_width(&f.text, f.size) > cut)
+                {
+                    crossing += 1;
+                } else {
+                    left_rows += usize::from(left);
+                    right_rows += usize::from(right);
+                }
+            }
+            let support = left_rows.min(right_rows);
+            (support >= 3 && crossing <= support).then_some((support, cut))
+        })
+        .max_by(|a, b| a.0.cmp(&b.0).then_with(|| b.1.total_cmp(&a.1)))
+        .map(|(_, cut)| cut)
+}
+
+fn row_line(row: Vec<Fragment>) -> Line {
+    Line {
+        text: collapse(
+            &row.iter()
+                .map(|f| f.text.as_str())
+                .collect::<Vec<_>>()
+                .join(" "),
+        ),
+        x: row[0].x,
+        y: row[0].y,
+        size: row.iter().map(|f| f.size).fold(0.0, f64::max),
+    }
 }
 
 /// Turn ordered lines into headings and paragraphs. The body size is the
-/// median line size; a line ≥ 1.25× that (and not too long) is a heading;
+/// page-wide median line size; a line ≥ 1.25× that (and not too long) is a heading;
 /// consecutive body lines join into a paragraph until the vertical gap or
 /// the left indent jumps.
-fn lines_to_blocks(lines: Vec<Line>) -> Vec<Node> {
+fn lines_to_blocks(lines: Vec<Line>, body: f64) -> Vec<Node> {
     if lines.is_empty() {
         return Vec::new();
     }
-    let body = median_size(&lines);
     let mut out = Vec::new();
     let mut para: Vec<String> = Vec::new();
     let mut para_x = 0.0f64;
@@ -349,64 +574,6 @@ fn median_size(lines: &[Line]) -> f64 {
         m
     } else {
         12.0
-    }
-}
-
-/// Detect a clean two-column split: a vertical gutter near the middle
-/// that almost no fragment straddles, with substantial text on both
-/// sides. Conservative on purpose — a wrong split is worse than none.
-fn split_columns(frags: &[Fragment]) -> Option<(Vec<Fragment>, Vec<Fragment>)> {
-    if frags.len() < 12 {
-        return None;
-    }
-    let min_x = frags.iter().map(|f| f.x).fold(f64::INFINITY, f64::min);
-    let max_x = frags
-        .iter()
-        .map(|f| f.x + est_width(&f.text, f.size))
-        .fold(f64::NEG_INFINITY, f64::max);
-    if !(min_x.is_finite() && max_x.is_finite()) || max_x - min_x < 100.0 {
-        return None;
-    }
-    let mid = (min_x + max_x) / 2.0;
-    // A fragment straddles the gutter if it starts left of mid and extends
-    // well past it.
-    let mut straddle = 0usize;
-    let mut left = 0usize;
-    let mut right = 0usize;
-    for f in frags {
-        let end = f.x + est_width(&f.text, f.size);
-        if f.x < mid && end > mid + (max_x - min_x) * 0.05 {
-            straddle += 1;
-        } else if end <= mid {
-            left += 1;
-        } else if f.x >= mid {
-            right += 1;
-        }
-    }
-    let total = frags.len();
-    // Require a near-empty gutter and real content on both sides.
-    if straddle * 20 <= total && left * 5 >= total && right * 5 >= total {
-        let l: Vec<Fragment> = frags
-            .iter()
-            .filter(|f| f.x + est_width(&f.text, f.size) <= mid)
-            .map(clone_frag)
-            .collect();
-        let r: Vec<Fragment> = frags
-            .iter()
-            .filter(|f| f.x + est_width(&f.text, f.size) > mid)
-            .map(clone_frag)
-            .collect();
-        return Some((l, r));
-    }
-    None
-}
-
-fn clone_frag(f: &Fragment) -> Fragment {
-    Fragment {
-        x: f.x,
-        y: f.y,
-        size: f.size,
-        text: f.text.clone(),
     }
 }
 
